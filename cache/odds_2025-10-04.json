@@ -1,0 +1,62 @@
+{
+  "Arsenal_vs_Southampton": {
+    "home_win": 3.09,
+    "draw": 3.04,
+    "away_win": 2.68,
+    "over_2.5": 2.14,
+    "under_2.5": 2.04,
+    "btts_yes": 1.8,
+    "btts_no": 2.17,
+    "source": "Generated"
+  },
+  "Liverpool_vs_Chelsea": {
+    "home_win": 3.77,
+    "draw": 3.06,
+    "away_win": 3.52,
+    "over_2.5": 2.44,
+    "under_2.5": 2.13,
+    "btts_yes": 1.85,
+    "btts_no": 1.66,
+    "source": "Generated"
+  },
+  "Man United_vs_Tottenham": {
+    "home_win": 3.94,
+    "draw": 3.89,
+    "away_win": 3.83,
+    "over_2.5": 2.47,
+    "under_2.5": 2.12,
+    "btts_yes": 2.15,
+    "btts_no": 1.75,
+    "source": "Generated"
+  },
+  "Real Madrid_vs_Borussia Dortmund": {
+    "home_win": 1.67,
+    "draw": 3.65,
+    "away_win": 2.26,
+    "over_2.5": 1.92,
+    "under_2.5": 2.33,
+    "btts_yes": 2.2,
+    "btts_no": 1.71,
+    "source": "Generated"
+  },
+  "Barcelona_vs_Bayern Munich": {
+    "home_win": 3.18,
+    "draw": 3.7,
+    "away_win": 2.48,
+    "over_2.5": 2.18,
+    "under_2.5": 2.14,
+    "btts_yes": 2.08,
+    "btts_no": 2.07,
+    "source": "Generated"
+  },
+  "Inter Milan_vs_AC Milan": {
+    "home_win": 3.93,
+    "draw": 4.04,
+    "away_win": 4.25,
+    "over_2.5": 1.88,
+    "under_2.5": 2.46,
+    "btts_yes": 1.73,
+    "btts_no": 1.88,
+    "source": "Generated"
+  }
+}
