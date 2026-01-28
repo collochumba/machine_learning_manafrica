@@ -1,0 +1,106 @@
+[
+  {
+    "timestamp": "2025-10-23T13:10:04.476761",
+    "match": "Eintracht Frankfurt vs Liverpool",
+    "model_predicted": "over_2.5",
+    "model_probs": {
+      "home": 0.39133874435295196,
+      "draw": 0.1944785901630085,
+      "away": 0.41418266548403965,
+      "over_2.5": 0.5355788583576564,
+      "btts_yes": 0.5303351906849404
+    },
+    "market_probs": {
+      "home": 0.2040816326530612,
+      "draw": 0.20833333333333334,
+      "away": 0.6578947368421053,
+      "home_norm": 0.1906753083838595,
+      "draw_norm": 0.1946477106418566,
+      "away_norm": 0.614676980974284,
+      "overround_pct": 7.03097028284998
+    },
+    "actual": {
+      "result": "A"
+    },
+    "model_correct": false,
+    "market_correct": false
+  },
+  {
+    "timestamp": "2025-10-23T13:10:22.294261",
+    "match": "Bayern Munchen vs Brugge",
+    "model_predicted": "over_2.5",
+    "model_probs": {
+      "home": 0.4085257753219845,
+      "draw": 0.1717042325500164,
+      "away": 0.4197699921279993,
+      "over_2.5": 0.5282096954355137,
+      "btts_yes": 0.5133691017662552
+    },
+    "market_probs": {
+      "home": 0.8771929824561404,
+      "draw": 0.1044932079414838,
+      "away": 0.05807200929152149,
+      "home_norm": 0.843650939918909,
+      "draw_norm": 0.10049760412827129,
+      "away_norm": 0.05585145595281976,
+      "overround_pct": 3.9758199689145624
+    },
+    "actual": {
+      "result": "H"
+    },
+    "model_correct": false,
+    "market_correct": false
+  },
+  {
+    "timestamp": "2025-10-23T13:10:29.866591",
+    "match": "Real Madrid vs Juventus",
+    "model_predicted": "over_2.5",
+    "model_probs": {
+      "home": 0.503479741283371,
+      "draw": 0.21049577371659864,
+      "away": 0.2860244850000307,
+      "over_2.5": 0.6821359945624852,
+      "btts_yes": 0.5359597667067331
+    },
+    "market_probs": {
+      "home": 0.6944444444444444,
+      "draw": 0.2,
+      "away": 0.14705882352941177,
+      "home_norm": 0.6667712582365862,
+      "draw_norm": 0.19203012237213685,
+      "away_norm": 0.1411986193912771,
+      "overround_pct": 4.150326797385606
+    },
+    "actual": {
+      "result": "H"
+    },
+    "model_correct": false,
+    "market_correct": false
+  },
+  {
+    "timestamp": "2025-10-23T13:10:36.331928",
+    "match": "Chelsea vs Ajax",
+    "model_predicted": "home",
+    "model_probs": {
+      "home": 0.6986117238430269,
+      "draw": 0.1479084811517392,
+      "away": 0.15347979500523362,
+      "over_2.5": 0.47279547114163334,
+      "btts_yes": 0.33984515298568047
+    },
+    "market_probs": {
+      "home": 0.7692307692307692,
+      "draw": 0.16666666666666666,
+      "away": 0.10869565217391305,
+      "home_norm": 0.736392742796158,
+      "draw_norm": 0.15955176093916756,
+      "away_norm": 0.10405549626467452,
+      "overround_pct": 4.459308807134876
+    },
+    "actual": {
+      "result": "H"
+    },
+    "model_correct": true,
+    "market_correct": false
+  }
+]
