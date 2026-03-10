@@ -19,20 +19,20 @@
 # ## 1. Install & Import Dependencies
 
 # Install required libraries (run once)
-get_ipython().system('pip install yfinance pandas numpy matplotlib seaborn --quiet')
-
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import seaborn as sns
+
 import warnings
 warnings.filterwarnings('ignore')
 
 pd.set_option('display.float_format', '{:.4f}'.format)
-plt.style.use('dark_background')
-print('✅ Libraries loaded successfully')
+plt.style.use('white_background')
+
+print("✔ Libraries loaded successfully")
 
 # ## 2. Configuration — Stocks & Parameters
 
