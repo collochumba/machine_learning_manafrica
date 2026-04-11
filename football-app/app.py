@@ -10,6 +10,15 @@ import joblib
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
+import os
+
+# Always load files relative to this script's location,
+# regardless of where Streamlit is launched from.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def load_file(name):
+    """Return absolute path to a model file in the same folder as app.py."""
+    return os.path.join(BASE_DIR, name)
 
 from models import DixonColesTimeDecay
 from predict import (
@@ -114,13 +123,12 @@ h3 {
 def load_all_models():
     """Load all trained models and data."""
     try:
-        final_model = joblib.load("final_model.pkl")
-        dc_models = joblib.load("dc_models.pkl")
-        feature_cols = joblib.load("feature_cols.pkl")
-        df = joblib.load("processed_data.pkl")
-        team_mapping = joblib.load("team_mapping.pkl")
-        # FIX 1: Load all_teams.pkl
-        all_teams = joblib.load("all_teams.pkl")
+        final_model = joblib.load(load_file("final_model.pkl"))
+        dc_models = joblib.load(load_file("dc_models.pkl"))
+        feature_cols = joblib.load(load_file("feature_cols.pkl"))
+        df = joblib.load(load_file("processed_data.pkl"))
+        team_mapping = joblib.load(load_file("team_mapping.pkl"))
+        all_teams = joblib.load(load_file("all_teams.pkl"))
 
         return final_model, dc_models, feature_cols, df, team_mapping, all_teams, None
 
