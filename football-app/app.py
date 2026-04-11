@@ -165,22 +165,22 @@ with st.sidebar:
     # FIX 2: Replace invalid format="%.0%%" with valid format strings
     min_prob = st.slider(
         "Minimum Probability",
-        min_value=0.20,
+        min_value=0.30,   # Raised floor — below 30% signal is unreliable
         max_value=0.70,
         value=0.45,
         step=0.05,
         format="%.2f",
-        help="Only show bets with model probability above this threshold"
+        help="Only show bets with model probability above this threshold. Below 0.30 the signal is unreliable."
     )
 
     min_ev = st.slider(
         "Minimum Expected Value",
-        min_value=0.00,
-        max_value=0.15,
-        value=0.03,
+        min_value=0.02,   # Hard floor — never allow zero/negative EV bets through
+        max_value=0.20,   # Raised ceiling for more range
+        value=0.05,       # Conservative default
         step=0.01,
         format="%.2f",
-        help="Only show bets with EV above this threshold"
+        help="Only show bets with positive EV above this threshold. Never set below 0.02."
     )
 
     st.markdown("---")
@@ -480,6 +480,14 @@ with tab1:
                                 Kelly Stake: <strong>{bet['kelly_stake']*100:.1f}%</strong> of bankroll
                                 </div>
                                 """, unsafe_allow_html=True)
+
+                                # High-EV sanity warning
+                                if bet['ev'] > 0.25:
+                                    st.warning(
+                                        f"⚠️ **Unusually high EV ({bet['ev']:.1%})** on {bet['market']}. "
+                                        "Verify these odds are current and from a reputable source before acting. "
+                                        "EV above 25% often indicates stale odds or model overconfidence."
+                                    )
 
                         else:
                             st.info("ℹ️ No value bets found with current filters")

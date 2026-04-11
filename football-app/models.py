@@ -310,71 +310,80 @@ def calculate_value(market_probs, bookmaker_odds):
 def find_value_bets(value_bets, min_prob=0.45, min_ev=0.03):
     """
     Filter for genuine value bets.
-    
+
     Args:
         value_bets: List of all bets with EV
         min_prob: Minimum probability threshold
         min_ev: Minimum EV threshold
-    
+
     Returns:
         Filtered list sorted by EV
     """
-    
+
     filtered = [
         bet for bet in value_bets
-        if bet['prob'] >= min_prob and bet['ev'] >= min_ev
+        if bet['prob'] >= min_prob
+        and bet['ev'] >= min_ev
+        and bet['ev'] <= 0.50       # Hard cap: EV > 50% almost certainly indicates model error
+        and bet['prob'] <= 0.95     # Reject near-certainty claims — model overconfidence
+        and bet['odds'] >= 1.20     # Ignore non-meaningful odds
     ]
-    
+
     # Sort by EV descending
     filtered = sorted(filtered, key=lambda x: x['ev'], reverse=True)
-    
+
     return filtered
 
 
-def calculate_kelly_stake(prob, odds, fraction=0.25):
+def calculate_kelly_stake(prob, odds, fraction=0.125):
     """
     Calculate Kelly criterion stake.
-    
-    Kelly = (prob * odds - 1) / (odds - 1)
-    
+
+    Kelly = (prob * (odds - 1) - (1 - prob)) / (odds - 1)
+
     Args:
         prob: Win probability
         odds: Bookmaker odds
-        fraction: Kelly fraction (default 0.25 = quarter Kelly)
-    
+        fraction: Kelly fraction (default 0.125 = eighth Kelly — conservative
+                  until model is fully backtested and calibrated)
+
     Returns:
         Recommended stake as fraction of bankroll
     """
-    
+
     if odds <= 1.0:
         return 0.0
-    
+
     kelly = (prob * (odds - 1) - (1 - prob)) / (odds - 1)
     kelly = max(0, kelly)  # No negative stakes
-    
+
     # Apply fractional Kelly
     kelly *= fraction
-    
-    # Cap at 5% of bankroll
-    kelly = min(kelly, 0.05)
-    
+
+    # Cap at 2% of bankroll per bet (safety guardrail)
+    kelly = min(kelly, 0.02)
+
     return kelly
 
 
 def calculate_confidence_score(probs):
     """
     Calculate prediction confidence.
-    
-    Confidence = difference between top 2 probabilities
-    
+
+    Confidence is scaled relative to a uniform distribution (1/3 each).
+    A score of 0 = maximally uncertain (all outcomes equal),
+    a score of 1 = maximally confident (one outcome probability = 1).
+
     Args:
         probs: Array of [home, draw, away] probabilities
-    
+
     Returns:
         Confidence score (0 = uncertain, 1 = very confident)
     """
-    
+
     sorted_probs = sorted(probs, reverse=True)
-    confidence = sorted_probs[0] - sorted_probs[1]
-    
+    # Scale: 0 when max_prob = 1/3 (uniform), 1 when max_prob = 1
+    confidence = (sorted_probs[0] - 1/3) * 1.5
+    confidence = max(0.0, min(1.0, float(confidence)))
+
     return confidence
