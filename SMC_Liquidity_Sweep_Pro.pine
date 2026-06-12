@@ -1,0 +1,754 @@
+//@version=6
+indicator("SMC Liquidity Sweep Pro", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+//==========================================================================
+// INPUTS
+//==========================================================================
+
+groupRisk = "Risk / Targets"
+minRR = input.float(2.0, "Minimum Risk:Reward", minval=0.25, step=0.25, group=groupRisk)
+showTradeModel = input.bool(true, "Show Entry / SL / TP Model", group=groupRisk)
+useWeeklyTp = input.bool(true, "Use Previous Weekly Liquidity As TP", group=groupRisk)
+entryProjectionBars = input.int(60, "Entry Zone Projection Bars", minval=5, maxval=300, group=groupRisk)
+
+groupAtr = "ATR System"
+atrPeriod = input.int(14, "ATR Period", minval=1, group=groupAtr)
+atrMultiplier = input.float(1.5, "ATR Stop Multiplier", minval=0.1, step=0.1, group=groupAtr)
+minAtrPips = input.float(5.0, "Minimum ATR In Pips", minval=0.0, step=0.25, group=groupAtr)
+pipMultiplier = input.float(10.0, "Pip Multiplier", minval=1.0, step=1.0, group=groupAtr)
+
+groupStructure = "Structure Settings"
+swingLookback = input.int(5, "H1 Swing Lookback", minval=2, maxval=50, group=groupStructure)
+displacementPct = input.float(60.0, "Displacement Body Percent", minval=1.0, maxval=100.0, step=1.0, group=groupStructure)
+minWickPips = input.float(5.0, "Minimum Sweep Wick Pips", minval=0.0, step=0.25, group=groupStructure)
+minAtrFraction = input.float(0.30, "Minimum ATR Fraction For Sweep", minval=0.0, step=0.05, group=groupStructure)
+retraceMode = input.string("50% Impulse", "Retracement Trigger", options=["50% Impulse", "BOS Level", "Either"], group=groupStructure)
+alignDailyWithWeekly = input.bool(true, "Require Daily Sweep Aligned With Weekly Bias", group=groupStructure)
+
+groupM15 = "M15 Entry Confirmation"
+m15Lookback = input.int(6, "M15 CHoCH Lookback", minval=3, maxval=30, group=groupM15)
+requireFvgForEntry = input.bool(false, "Require M15 FVG For Entry", group=groupM15)
+showFvg = input.bool(true, "Draw FVG Boxes", group=groupM15)
+extendFvgBars = input.int(30, "FVG Projection Bars", minval=3, maxval=200, group=groupM15)
+
+groupSessions = "Killzones"
+filterByKillzone = input.bool(true, "Filter Signals By Killzone", group=groupSessions)
+showKillzones = input.bool(true, "Shade Killzones", group=groupSessions)
+useLondon = input.bool(true, "London Killzone", group=groupSessions)
+londonSession = input.session("0700-1000", "London Session UTC", group=groupSessions)
+useNewYork = input.bool(true, "New York Killzone", group=groupSessions)
+newYorkSession = input.session("1300-1500", "New York Session UTC", group=groupSessions)
+
+groupVisuals = "Visuals"
+showDashboard = input.bool(true, "Show Dashboard", group=groupVisuals)
+showLiquidityLevels = input.bool(true, "Show PDH / PDL Levels", group=groupVisuals)
+showSweepZones = input.bool(true, "Show Sweep Zones", group=groupVisuals)
+showBosLines = input.bool(true, "Show BOS Lines", group=groupVisuals)
+showLabels = input.bool(true, "Show Labels", group=groupVisuals)
+maxStoredObjects = input.int(120, "Max Stored Objects Per Type", minval=20, maxval=400, group=groupVisuals)
+
+groupColors = "Colors"
+bullColor = input.color(color.rgb(32, 184, 132), "Bullish Color", group=groupColors)
+bearColor = input.color(color.rgb(235, 82, 82), "Bearish Color", group=groupColors)
+sweepColor = input.color(color.rgb(245, 166, 35), "Sweep Color", group=groupColors)
+bosColor = input.color(color.rgb(48, 128, 245), "BOS Color", group=groupColors)
+fvgColor = input.color(color.rgb(148, 96, 214), "FVG Color", group=groupColors)
+tpColor = input.color(color.rgb(240, 205, 90), "TP Color", group=groupColors)
+slColor = input.color(color.rgb(235, 70, 70), "SL Color", group=groupColors)
+dashboardBg = input.color(color.rgb(15, 18, 30), "Dashboard Background", group=groupColors)
+dashboardText = input.color(color.rgb(225, 230, 240), "Dashboard Text", group=groupColors)
+
+//==========================================================================
+// CONSTANTS
+//==========================================================================
+
+int BIAS_NONE = 0
+int BIAS_BULLISH = 1
+int BIAS_BEARISH = -1
+
+int SWEEP_NONE = 0
+int SWEEP_HIGH = 1
+int SWEEP_LOW = -1
+
+float pip = syminfo.mintick * pipMultiplier
+
+//==========================================================================
+// OBJECT STORAGE
+//==========================================================================
+
+var array<box>   sweepBoxes   = array.new<box>()
+var array<box>   fvgBoxes     = array.new<box>()
+var array<box>   tradeBoxes   = array.new<box>()
+var array<line>  bosLines     = array.new<line>()
+var array<line>  tradeLines   = array.new<line>()
+var array<label> sweepLabels  = array.new<label>()
+var array<label> bosLabels    = array.new<label>()
+var array<label> fvgLabels    = array.new<label>()
+var array<label> tradeLabels  = array.new<label>()
+
+//==========================================================================
+// HELPERS
+//==========================================================================
+
+bodyPercent(float o, float h, float l, float c) =>
+    float r = h - l
+    r > 0.0 ? math.abs(c - o) / r * 100.0 : 0.0
+
+isDisplacement(float o, float h, float l, float c, int direction) =>
+    bool dirOk = direction == BIAS_BULLISH ? c > o : direction == BIAS_BEARISH ? c < o : false
+    bodyPercent(o, h, l, c) >= displacementPct and dirOk
+
+biasText(int bias) =>
+    bias == BIAS_BULLISH ? "BULLISH" : bias == BIAS_BEARISH ? "BEARISH" : "NONE"
+
+biasShort(int bias) =>
+    bias == BIAS_BULLISH ? "BULL" : bias == BIAS_BEARISH ? "BEAR" : "---"
+
+sweepText(int sweep) =>
+    sweep == SWEEP_HIGH ? "HIGH SWEEP" : sweep == SWEEP_LOW ? "LOW SWEEP" : "---"
+
+trimBoxes(array<box> arr) =>
+    while array.size(arr) > maxStoredObjects
+        box b = array.shift(arr)
+        box.delete(b)
+
+trimLines(array<line> arr) =>
+    while array.size(arr) > maxStoredObjects
+        line l = array.shift(arr)
+        line.delete(l)
+
+trimLabels(array<label> arr) =>
+    while array.size(arr) > maxStoredObjects
+        label lb = array.shift(arr)
+        label.delete(lb)
+
+storeBox(array<box> arr, box b) =>
+    array.push(arr, b)
+    trimBoxes(arr)
+
+storeLine(array<line> arr, line l) =>
+    array.push(arr, l)
+    trimLines(arr)
+
+storeLabel(array<label> arr, label lb) =>
+    array.push(arr, lb)
+    trimLabels(arr)
+
+weeklyBiasFunction() =>
+    float h1 = high[1]
+    float h2 = high[2]
+    float h3 = high[3]
+    float l1 = low[1]
+    float l2 = low[2]
+    float l3 = low[3]
+    int result = BIAS_NONE
+    if not na(h3) and not na(l3)
+        if h1 > h2 and h2 > h3 and l1 > l2 and l2 > l3
+            result := BIAS_BULLISH
+        else if h1 < h2 and h2 < h3 and l1 < l2 and l2 < l3
+            result := BIAS_BEARISH
+        else if h1 > h2 and l1 > l2
+            result := BIAS_BULLISH
+        else if h1 < h2 and l1 < l2
+            result := BIAS_BEARISH
+    result
+
+//==========================================================================
+// PART 1 — M15 CONFIRMATION: CLOSED-CANDLE GATING (NO REPAINTING)
+// All M15 logic executes only on confirmed (closed) M15 candles.
+// barstate.isconfirmed inside request.security is insufficient on its own;
+// we gate additionally with ta.change(time("15")) computed INSIDE the
+// security call so the candle-close event is evaluated on the M15 chart.
+//==========================================================================
+
+m15ConfirmationFunction(int direction) =>
+    // Gate: only act on the bar AFTER an M15 close
+    // time[1] is always the previous closed M15 bar's open-time.
+    // Using [1] offsets ensures we never look at the current forming candle.
+    bool confirmed   = false
+    bool fvgFound    = false
+    float fvgTop     = na
+    float fvgBottom  = na
+    int fvgDirection = BIAS_NONE
+    float confirmClose = na
+
+    // All indexing uses [1]+ so we only read fully CLOSED candles.
+    if bar_index > m15Lookback + 4
+        if direction == BIAS_BULLISH
+            float lowestLow = 10e10
+            int extremeBar  = 1
+            for i = 1 to m15Lookback
+                if low[i] < lowestLow
+                    lowestLow := low[i]
+                    extremeBar := i
+
+            float prevHigh = high[extremeBar]
+            for j = 1 to m15Lookback
+                if j < extremeBar and high[j] > prevHigh and not confirmed
+                    bool disp = isDisplacement(open[j], high[j], low[j], close[j], BIAS_BULLISH)
+                    bool fvg  = low[j] > high[j + 2]
+                    if disp
+                        confirmed    := requireFvgForEntry ? fvg : true
+                        fvgFound     := fvg
+                        fvgTop       := low[j]
+                        fvgBottom    := high[j + 2]
+                        fvgDirection := BIAS_BULLISH
+                        confirmClose := close[j]
+
+        if direction == BIAS_BEARISH
+            float highestHigh = 0.0
+            int extremeBar    = 1
+            for i = 1 to m15Lookback
+                if high[i] > highestHigh
+                    highestHigh := high[i]
+                    extremeBar  := i
+
+            float prevLow = low[extremeBar]
+            for j = 1 to m15Lookback
+                if j < extremeBar and low[j] < prevLow and not confirmed
+                    bool disp = isDisplacement(open[j], high[j], low[j], close[j], BIAS_BEARISH)
+                    bool fvg  = high[j] < low[j + 2]
+                    if disp
+                        confirmed    := requireFvgForEntry ? fvg : true
+                        fvgFound     := fvg
+                        fvgTop       := low[j + 2]
+                        fvgBottom    := high[j]
+                        fvgDirection := BIAS_BEARISH
+                        confirmClose := close[j]
+
+    [confirmed, fvgFound, fvgTop, fvgBottom, fvgDirection, confirmClose, time]
+
+//==========================================================================
+// MULTI-TIMEFRAME DATA
+//==========================================================================
+
+weeklyBias   = request.security(syminfo.tickerid, "W",  weeklyBiasFunction(),          gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+prevWeekHigh = request.security(syminfo.tickerid, "W",  high[1],                        gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+prevWeekLow  = request.security(syminfo.tickerid, "W",  low[1],                         gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+pdh       = request.security(syminfo.tickerid, "D", high[1],  gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+pdl       = request.security(syminfo.tickerid, "D", low[1],   gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+dailyTime = request.security(syminfo.tickerid, "D", time,     gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+[h1Open, h1High, h1Low, h1Close, h1Time, h1Atr, h1SwingHigh, h1SwingLow] = request.security(
+     syminfo.tickerid, "60",
+     [open[1], high[1], low[1], close[1], time[1], ta.atr(atrPeriod)[1],
+      ta.highest(high, swingLookback)[2], ta.lowest(low, swingLookback)[2]],
+     gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// PART 1 FIX: Pull M15 results using [1] offset inside request.security so
+// confirmation is always based on the LAST FULLY CLOSED M15 candle.
+// The function itself uses [1]+ offsets; the outer [1] on time ensures the
+// newM15 edge fires only once per closed bar on the base timeframe.
+[m15BullConfirmed, m15BullFvg, m15BullFvgTop, m15BullFvgBottom, m15BullFvgDir, m15BullConfirmClose, m15BullTime] =
+     request.security(syminfo.tickerid, "15", m15ConfirmationFunction(BIAS_BULLISH),
+     gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+[m15BearConfirmed, m15BearFvg, m15BearFvgTop, m15BearFvgBottom, m15BearFvgDir, m15BearConfirmClose, m15BearTime] =
+     request.security(syminfo.tickerid, "15", m15ConfirmationFunction(BIAS_BEARISH),
+     gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+bool newH1      = ta.change(h1Time)      != 0
+bool newDay     = ta.change(dailyTime)   != 0
+// Gate M15 FVG drawing on closed-bar transitions only
+bool newM15Bull = ta.change(m15BullTime) != 0
+bool newM15Bear = ta.change(m15BearTime) != 0
+
+//==========================================================================
+// SESSION LOGIC
+// PART 4 FIX: Sweeps and BOS fire any time; only entry respects killzone.
+//==========================================================================
+
+inLondon  = useLondon  and not na(time(timeframe.period, londonSession,  "UTC"))
+inNewYork = useNewYork and not na(time(timeframe.period, newYorkSession, "UTC"))
+inKillzone = inLondon or inNewYork
+
+// entrySessionOk: used exclusively for entry gating
+entrySessionOk = filterByKillzone ? inKillzone : true
+
+bgcolor(showKillzones and inLondon  ? color.new(bullColor, 91) : na)
+bgcolor(showKillzones and inNewYork ? color.new(bosColor,  91) : na)
+
+//==========================================================================
+// PERSISTENT STATE
+//==========================================================================
+
+var int   dailyBias            = BIAS_NONE
+var int   sweepState           = SWEEP_NONE
+var float sweepLevel           = na
+var float sweepReferenceLevel  = na
+var int   bosState             = BIAS_NONE
+var float bosLevel             = na
+var float retraceTarget        = na
+var bool  waitingRetrace       = false
+var bool  setupUsed            = false
+var int   lastSweepBar         = na
+var int   lastBosBar           = na
+var float lastEntry            = na
+var float lastSl               = na
+var float lastTp1              = na
+var float lastTp2              = na
+var int   lastEntryDirection   = BIAS_NONE
+
+// PART 5: BOS memory — prevent same-candle BOS+entry
+var int   bosConfirmedBar      = na
+
+// PART 2: Trade state tracking
+var bool  tradeActive          = false
+var int   tradeDirection       = BIAS_NONE
+var bool  tp1Hit               = false
+var bool  tp2Hit               = false
+var bool  slHit                = false
+
+// Dashboard last-alert string
+var string lastAlertText       = "---"
+var string tradeStatusText     = "WAITING"
+
+if newDay
+    dailyBias           := BIAS_NONE
+    sweepState          := SWEEP_NONE
+    sweepLevel          := na
+    sweepReferenceLevel := na
+    bosState            := BIAS_NONE
+    bosLevel            := na
+    retraceTarget       := na
+    waitingRetrace      := false
+    setupUsed           := false
+    lastEntryDirection  := BIAS_NONE
+    bosConfirmedBar     := na
+
+//==========================================================================
+// LIQUIDITY LEVELS
+//==========================================================================
+
+var line  pdhLine  = na
+var line  pdlLine  = na
+var label pdhLabel = na
+var label pdlLabel = na
+
+if showLiquidityLevels and barstate.islast and not na(pdh) and not na(pdl)
+    if na(pdhLine)
+        pdhLine  := line.new(bar_index - 1, pdh, bar_index, pdh, extend=extend.right, color=color.new(sweepColor, 15), style=line.style_dotted, width=1)
+        pdlLine  := line.new(bar_index - 1, pdl, bar_index, pdl, extend=extend.right, color=color.new(sweepColor, 15), style=line.style_dotted, width=1)
+        if showLabels
+            pdhLabel := label.new(bar_index, pdh, "PDH", style=label.style_label_left, textcolor=color.white, color=color.new(sweepColor, 10), size=size.tiny)
+            pdlLabel := label.new(bar_index, pdl, "PDL", style=label.style_label_left, textcolor=color.white, color=color.new(sweepColor, 10), size=size.tiny)
+    line.set_xy1(pdhLine, bar_index - 1, pdh)
+    line.set_xy2(pdhLine, bar_index,     pdh)
+    line.set_xy1(pdlLine, bar_index - 1, pdl)
+    line.set_xy2(pdlLine, bar_index,     pdl)
+    if showLabels and not na(pdhLabel) and not na(pdlLabel)
+        label.set_xy(pdhLabel, bar_index, pdh)
+        label.set_xy(pdlLabel, bar_index, pdl)
+
+//==========================================================================
+// DAILY LIQUIDITY SWEEPS
+// PART 4 FIX: No session restriction on sweeps.
+//==========================================================================
+
+atrPips           = h1Atr / pip
+minSweepDistance  = math.max(minWickPips * pip, h1Atr * minAtrFraction)
+
+highSweep = newH1 and h1High > pdh and h1Close < pdh and (h1High - pdh) >= minSweepDistance
+lowSweep  = newH1 and h1Low  < pdl and h1Close > pdl and (pdl  - h1Low) >= minSweepDistance
+
+highSweepAligned = alignDailyWithWeekly ? weeklyBias == BIAS_BEARISH : true
+lowSweepAligned  = alignDailyWithWeekly ? weeklyBias == BIAS_BULLISH : true
+
+// Sweeps fire without session gate (PART 4)
+if atrPips >= minAtrPips and not setupUsed
+    if highSweep
+        dailyBias := BIAS_BEARISH
+        if highSweepAligned
+            sweepState          := SWEEP_HIGH
+            sweepLevel          := h1High
+            sweepReferenceLevel := pdh
+            bosState            := BIAS_NONE
+            bosLevel            := na
+            retraceTarget       := na
+            waitingRetrace      := false
+            bosConfirmedBar     := na
+            lastSweepBar        := bar_index
+            if showSweepZones
+                box b = box.new(bar_index, h1High, bar_index + 40, pdh, bgcolor=color.new(sweepColor, 84), border_color=color.new(sweepColor, 10))
+                storeBox(sweepBoxes, b)
+            if showLabels
+                label lb = label.new(bar_index, h1High, "PDH Sweep", style=label.style_label_down, textcolor=color.white, color=color.new(sweepColor, 0), size=size.small)
+                storeLabel(sweepLabels, lb)
+
+    if lowSweep
+        dailyBias := BIAS_BULLISH
+        if lowSweepAligned
+            sweepState          := SWEEP_LOW
+            sweepLevel          := h1Low
+            sweepReferenceLevel := pdl
+            bosState            := BIAS_NONE
+            bosLevel            := na
+            retraceTarget       := na
+            waitingRetrace      := false
+            bosConfirmedBar     := na
+            lastSweepBar        := bar_index
+            if showSweepZones
+                box b = box.new(bar_index, pdl, bar_index + 40, h1Low, bgcolor=color.new(sweepColor, 84), border_color=color.new(sweepColor, 10))
+                storeBox(sweepBoxes, b)
+            if showLabels
+                label lb = label.new(bar_index, h1Low, "PDL Sweep", style=label.style_label_up, textcolor=color.white, color=color.new(sweepColor, 0), size=size.small)
+                storeLabel(sweepLabels, lb)
+
+//==========================================================================
+// H1 BREAK OF STRUCTURE
+// PART 4 FIX: No session restriction on BOS detection.
+// PART 5 FIX: Record bosConfirmedBar to prevent same-candle entry.
+//==========================================================================
+
+h1RangePips       = (h1High - h1Low) / pip
+h1BullDisplacement = isDisplacement(h1Open, h1High, h1Low, h1Close, BIAS_BULLISH) and h1RangePips >= minWickPips
+h1BearDisplacement = isDisplacement(h1Open, h1High, h1Low, h1Close, BIAS_BEARISH) and h1RangePips >= minWickPips
+
+bullBos = newH1 and sweepState == SWEEP_LOW  and bosState == BIAS_NONE and h1Close > h1SwingHigh and h1BullDisplacement
+bearBos = newH1 and sweepState == SWEEP_HIGH and bosState == BIAS_NONE and h1Close < h1SwingLow  and h1BearDisplacement
+
+// BOS fires without session gate (PART 4)
+if not setupUsed and sweepState != SWEEP_NONE
+    if bullBos
+        bosState        := BIAS_BULLISH
+        bosLevel        := h1SwingHigh
+        retraceTarget   := (bosLevel + sweepLevel) / 2.0
+        waitingRetrace  := true
+        bosConfirmedBar := bar_index          // PART 5: record BOS bar
+        lastBosBar      := bar_index
+        if showBosLines
+            line l = line.new(bar_index, bosLevel, bar_index + 80, bosLevel, extend=extend.right, color=bosColor, width=2)
+            storeLine(bosLines, l)
+        if showLabels
+            label lb = label.new(bar_index, bosLevel, "Bullish BOS", style=label.style_label_down, textcolor=color.white, color=color.new(bosColor, 0), size=size.small)
+            storeLabel(bosLabels, lb)
+
+    if bearBos
+        bosState        := BIAS_BEARISH
+        bosLevel        := h1SwingLow
+        retraceTarget   := (bosLevel + sweepLevel) / 2.0
+        waitingRetrace  := true
+        bosConfirmedBar := bar_index          // PART 5: record BOS bar
+        lastBosBar      := bar_index
+        if showBosLines
+            line l = line.new(bar_index, bosLevel, bar_index + 80, bosLevel, extend=extend.right, color=bosColor, width=2)
+            storeLine(bosLines, l)
+        if showLabels
+            label lb = label.new(bar_index, bosLevel, "Bearish BOS", style=label.style_label_up, textcolor=color.white, color=color.new(bosColor, 0), size=size.small)
+            storeLabel(bosLabels, lb)
+
+//==========================================================================
+// M15 FVG VISUALS
+// Draws only on closed M15 candle transitions (newM15Bull / newM15Bear)
+//==========================================================================
+
+if showFvg and newM15Bull and m15BullFvg and not na(m15BullFvgTop) and not na(m15BullFvgBottom)
+    box b = box.new(bar_index, m15BullFvgTop, bar_index + extendFvgBars, m15BullFvgBottom, bgcolor=color.new(fvgColor, 84), border_color=color.new(bullColor, 20))
+    storeBox(fvgBoxes, b)
+    if showLabels
+        label lb = label.new(bar_index, (m15BullFvgTop + m15BullFvgBottom) / 2.0, "Bull FVG", style=label.style_label_left, textcolor=color.white, color=color.new(fvgColor, 10), size=size.tiny)
+        storeLabel(fvgLabels, lb)
+
+if showFvg and newM15Bear and m15BearFvg and not na(m15BearFvgTop) and not na(m15BearFvgBottom)
+    box b = box.new(bar_index, m15BearFvgTop, bar_index + extendFvgBars, m15BearFvgBottom, bgcolor=color.new(fvgColor, 84), border_color=color.new(bearColor, 20))
+    storeBox(fvgBoxes, b)
+    if showLabels
+        label lb = label.new(bar_index, (m15BearFvgTop + m15BearFvgBottom) / 2.0, "Bear FVG", style=label.style_label_left, textcolor=color.white, color=color.new(fvgColor, 10), size=size.tiny)
+        storeLabel(fvgLabels, lb)
+
+//==========================================================================
+// RETRACEMENT AND ENTRY CONFIRMATION
+// PART 5 FIX: Require at least 1 bar after BOS before entry is allowed.
+// PART 4 FIX: Entry still respects killzone (entrySessionOk).
+//==========================================================================
+
+// Wait at least 1 bar after BOS candle (prevents same-candle BOS+entry)
+bosBarGuard = na(bosConfirmedBar) or bar_index > bosConfirmedBar
+
+bullRetrace50  = waitingRetrace and bosState == BIAS_BULLISH and low  <= retraceTarget
+bearRetrace50  = waitingRetrace and bosState == BIAS_BEARISH and high >= retraceTarget
+
+bullRetraceBos = waitingRetrace and bosState == BIAS_BULLISH and low  <= bosLevel
+bearRetraceBos = waitingRetrace and bosState == BIAS_BEARISH and high >= bosLevel
+
+bullRetraceHit = retraceMode == "50% Impulse" ? bullRetrace50 : retraceMode == "BOS Level" ? bullRetraceBos : bullRetrace50 or bullRetraceBos
+bearRetraceHit = retraceMode == "50% Impulse" ? bearRetrace50 : retraceMode == "BOS Level" ? bearRetraceBos : bearRetrace50 or bearRetraceBos
+
+bullEntrySignal = not setupUsed and entrySessionOk and atrPips >= minAtrPips and bullRetraceHit and m15BullConfirmed and bosBarGuard
+bearEntrySignal = not setupUsed and entrySessionOk and atrPips >= minAtrPips and bearRetraceHit and m15BearConfirmed and bosBarGuard
+
+//==========================================================================
+// PART 2 — ENTRY MODEL FIX: use retraceTarget as entry price
+// PART 3 — WEEKLY TP VALIDATION: fallback when weekly TP is invalid
+//==========================================================================
+
+if bullEntrySignal
+    // PART 2: Entry at retracement zone, not candle close
+    float entry = retraceTarget
+    float sl    = sweepLevel - h1Atr * atrMultiplier
+    float risk  = entry - sl
+
+    if risk > 0
+        float tp1 = entry + risk
+
+        // PART 3: Validate weekly TP — must be above entry for bullish trade
+        float rawTp2 = useWeeklyTp and prevWeekHigh > entry ? prevWeekHigh : entry + risk * minRR
+        float rr     = math.abs(rawTp2 - entry) / risk
+        float tp2    = rr < minRR ? entry + risk * minRR : rawTp2
+
+        lastEntry          := entry
+        lastSl             := sl
+        lastTp1            := tp1
+        lastTp2            := tp2
+        lastEntryDirection := BIAS_BULLISH
+        setupUsed          := true
+        waitingRetrace     := false
+
+        // Trade state
+        tradeActive    := true
+        tradeDirection := BIAS_BULLISH
+        tp1Hit         := false
+        tp2Hit         := false
+        slHit          := false
+        tradeStatusText := "ACTIVE"
+        lastAlertText  := "BUY ENTRY"
+
+        if showTradeModel
+            box riskBox   = box.new(bar_index, entry, bar_index + entryProjectionBars, sl,   bgcolor=color.new(bullColor, 88), border_color=color.new(bullColor, 20))
+            box rewardBox = box.new(bar_index, tp2,   bar_index + entryProjectionBars, entry, bgcolor=color.new(tpColor,  90), border_color=color.new(tpColor,  20))
+            line entryLine = line.new(bar_index, entry, bar_index + entryProjectionBars, entry, color=bullColor, width=2)
+            line slLine    = line.new(bar_index, sl,    bar_index + entryProjectionBars, sl,    color=slColor,   style=line.style_dashed,  width=1)
+            line tp1Line   = line.new(bar_index, tp1,   bar_index + entryProjectionBars, tp1,   color=tpColor,   style=line.style_dotted,  width=1)
+            line tp2Line   = line.new(bar_index, tp2,   bar_index + entryProjectionBars, tp2,   color=tpColor,   style=line.style_dashed,  width=2)
+            storeBox(tradeBoxes,  riskBox)
+            storeBox(tradeBoxes,  rewardBox)
+            storeLine(tradeLines, entryLine)
+            storeLine(tradeLines, slLine)
+            storeLine(tradeLines, tp1Line)
+            storeLine(tradeLines, tp2Line)
+        if showLabels
+            label lb = label.new(bar_index, entry, "BUY Entry", style=label.style_label_up, textcolor=color.white, color=color.new(bullColor, 0), size=size.small)
+            storeLabel(tradeLabels, lb)
+
+if bearEntrySignal
+    // PART 2: Entry at retracement zone, not candle close
+    float entry = retraceTarget
+    float sl    = sweepLevel + h1Atr * atrMultiplier
+    float risk  = sl - entry
+
+    if risk > 0
+        float tp1 = entry - risk
+
+        // PART 3: Validate weekly TP — must be below entry for bearish trade
+        float rawTp2 = useWeeklyTp and prevWeekLow < entry ? prevWeekLow : entry - risk * minRR
+        float rr     = math.abs(rawTp2 - entry) / risk
+        float tp2    = rr < minRR ? entry - risk * minRR : rawTp2
+
+        lastEntry          := entry
+        lastSl             := sl
+        lastTp1            := tp1
+        lastTp2            := tp2
+        lastEntryDirection := BIAS_BEARISH
+        setupUsed          := true
+        waitingRetrace     := false
+
+        // Trade state
+        tradeActive    := true
+        tradeDirection := BIAS_BEARISH
+        tp1Hit         := false
+        tp2Hit         := false
+        slHit          := false
+        tradeStatusText := "ACTIVE"
+        lastAlertText  := "SELL ENTRY"
+
+        if showTradeModel
+            box riskBox   = box.new(bar_index, sl,    bar_index + entryProjectionBars, entry, bgcolor=color.new(bearColor, 88), border_color=color.new(bearColor, 20))
+            box rewardBox = box.new(bar_index, entry, bar_index + entryProjectionBars, tp2,   bgcolor=color.new(tpColor,  90), border_color=color.new(tpColor,  20))
+            line entryLine = line.new(bar_index, entry, bar_index + entryProjectionBars, entry, color=bearColor, width=2)
+            line slLine    = line.new(bar_index, sl,    bar_index + entryProjectionBars, sl,    color=slColor,   style=line.style_dashed, width=1)
+            line tp1Line   = line.new(bar_index, tp1,   bar_index + entryProjectionBars, tp1,   color=tpColor,   style=line.style_dotted, width=1)
+            line tp2Line   = line.new(bar_index, tp2,   bar_index + entryProjectionBars, tp2,   color=tpColor,   style=line.style_dashed, width=2)
+            storeBox(tradeBoxes,  riskBox)
+            storeBox(tradeBoxes,  rewardBox)
+            storeLine(tradeLines, entryLine)
+            storeLine(tradeLines, slLine)
+            storeLine(tradeLines, tp1Line)
+            storeLine(tradeLines, tp2Line)
+        if showLabels
+            label lb = label.new(bar_index, entry, "SELL Entry", style=label.style_label_down, textcolor=color.white, color=color.new(bearColor, 0), size=size.small)
+            storeLabel(tradeLabels, lb)
+
+//==========================================================================
+// PART 3 — TP / SL TRACKING & ALERTS (per-bar, after trade is active)
+//==========================================================================
+
+bool buyTp1Hit  = false
+bool buyTp2Hit  = false
+bool buySlHit   = false
+bool sellTp1Hit = false
+bool sellTp2Hit = false
+bool sellSlHit  = false
+bool tradeClosed = false
+
+if tradeActive and not na(lastEntry) and not na(lastSl) and not na(lastTp1) and not na(lastTp2)
+    if tradeDirection == BIAS_BULLISH
+        if not tp1Hit and high >= lastTp1
+            tp1Hit     := true
+            buyTp1Hit  := true
+            lastAlertText := "BUY TP1 HIT"
+
+        if not tp2Hit and high >= lastTp2
+            tp2Hit     := true
+            buyTp2Hit  := true
+            lastAlertText := "BUY TP2 HIT"
+            tradeActive   := false
+            tradeClosed   := true
+            tradeStatusText := "CLOSED (TP)"
+
+        if not slHit and low <= lastSl
+            slHit      := true
+            buySlHit   := true
+            lastAlertText := "BUY STOP LOSS HIT"
+            tradeActive   := false
+            tradeClosed   := true
+            tradeStatusText := "CLOSED (SL)"
+
+    if tradeDirection == BIAS_BEARISH
+        if not tp1Hit and low <= lastTp1
+            tp1Hit     := true
+            sellTp1Hit := true
+            lastAlertText := "SELL TP1 HIT"
+
+        if not tp2Hit and low <= lastTp2
+            tp2Hit     := true
+            sellTp2Hit := true
+            lastAlertText := "SELL TP2 HIT"
+            tradeActive   := false
+            tradeClosed   := true
+            tradeStatusText := "CLOSED (TP)"
+
+        if not slHit and high >= lastSl
+            slHit      := true
+            sellSlHit  := true
+            lastAlertText := "SELL STOP LOSS HIT"
+            tradeActive   := false
+            tradeClosed   := true
+            tradeStatusText := "CLOSED (SL)"
+
+if not tradeActive and not setupUsed
+    tradeStatusText := "WAITING"
+
+//==========================================================================
+// SIGNALS (plotshape — for TradingView visual markers)
+//==========================================================================
+
+plotshape(bullEntrySignal, title="SMC Buy Entry",  style=shape.triangleup,   location=location.belowbar, color=bullColor, text="SMC BUY",  textcolor=color.white, size=size.small)
+plotshape(bearEntrySignal, title="SMC Sell Entry", style=shape.triangledown, location=location.abovebar, color=bearColor, text="SMC SELL", textcolor=color.white, size=size.small)
+
+//==========================================================================
+// PART 5 (ALERTS) — ALERT CONDITIONS
+// All alertcondition() calls compile unconditionally in Pine v6.
+//==========================================================================
+
+// Entry alerts
+alertcondition(bullEntrySignal, "SMC Buy Entry",
+     "SMC BUY ENTRY | {{ticker}} | Timeframe: {{interval}} | Price: {{close}}")
+alertcondition(bearEntrySignal, "SMC Sell Entry",
+     "SMC SELL ENTRY | {{ticker}} | Timeframe: {{interval}} | Price: {{close}}")
+
+// TP / SL alerts
+alertcondition(buyTp1Hit,  "BUY TP1 Hit",        "BUY TP1 HIT | {{ticker}}")
+alertcondition(buyTp2Hit,  "BUY TP2 Hit",        "BUY TP2 HIT | {{ticker}}")
+alertcondition(buySlHit,   "BUY Stop Loss Hit",   "BUY STOP LOSS HIT | {{ticker}}")
+alertcondition(sellTp1Hit, "SELL TP1 Hit",        "SELL TP1 HIT | {{ticker}}")
+alertcondition(sellTp2Hit, "SELL TP2 Hit",        "SELL TP2 HIT | {{ticker}}")
+alertcondition(sellSlHit,  "SELL Stop Loss Hit",  "SELL STOP LOSS HIT | {{ticker}}")
+
+// Trade closed alert
+alertcondition(tradeClosed, "Trade Closed",
+     "TRADE CLOSED | {{ticker}} | Check chart for result.")
+
+// BOS + Sweep alerts (PART 5 — improved formatting)
+alertcondition(highSweep, "BEARISH PDH Liquidity Sweep",
+     "BEARISH PDH LIQUIDITY SWEEP | {{ticker}} | Previous day high swept — candle closed inside.")
+alertcondition(lowSweep,  "BULLISH PDL Liquidity Sweep",
+     "BULLISH PDL LIQUIDITY SWEEP | {{ticker}} | Previous day low swept — candle closed inside.")
+alertcondition(bullBos,   "Bullish H1 BOS Confirmed",
+     "BULLISH H1 BOS CONFIRMED | {{ticker}} | Break of structure with displacement.")
+alertcondition(bearBos,   "Bearish H1 BOS Confirmed",
+     "BEARISH H1 BOS CONFIRMED | {{ticker}} | Break of structure with displacement.")
+
+//==========================================================================
+// DASHBOARD
+// PART 7: Added Trade Status and Last Alert rows.
+//==========================================================================
+
+var table dashboard = table.new(position.top_right, 2, 11, border_width=1, frame_width=1, border_color=color.new(color.white, 82), frame_color=color.new(color.white, 82))
+
+dashboardCell(int col, int row, string textValue, color bgColor, color textColor) =>
+    table.cell(dashboard, col, row, textValue, bgcolor=bgColor, text_color=textColor, text_size=size.small)
+
+if showDashboard and barstate.islast
+    color header    = color.new(dashboardBg, 0)
+    color body      = color.new(dashboardBg, 12)
+    color neutral   = color.new(color.gray, 80)
+    color bullBg    = color.new(bullColor,  70)
+    color bearBg    = color.new(bearColor,  70)
+    color warnBg    = color.new(sweepColor, 70)
+    color atrBg     = atrPips >= minAtrPips ? bullBg : bearBg
+    color weeklyBg  = weeklyBias == BIAS_BULLISH ? bullBg : weeklyBias == BIAS_BEARISH ? bearBg : neutral
+    color dailyBg   = dailyBias  == BIAS_BULLISH ? bullBg : dailyBias  == BIAS_BEARISH ? bearBg : neutral
+    color sweepBg   = sweepState == SWEEP_NONE ? neutral : warnBg
+    color bosBg     = bosState   == BIAS_BULLISH ? bullBg : bosState   == BIAS_BEARISH ? bearBg : neutral
+    color sessionBg = inKillzone ? bullBg : neutral
+
+    // Trade status background
+    color tradeBg   = tradeActive ? (tradeDirection == BIAS_BULLISH ? bullBg : bearBg) :
+                      str.contains(tradeStatusText, "TP") ? bullBg :
+                      str.contains(tradeStatusText, "SL") ? bearBg : neutral
+
+    string sessionText = inLondon ? "LONDON" : inNewYork ? "NEW YORK" : "OFF"
+    string stateText   = setupUsed ? "SETUP USED" : waitingRetrace ? "WAIT RETRACE" : sweepState != SWEEP_NONE ? "WAIT BOS" : "SCANNING"
+
+    dashboardCell(0, 0,  "SMC Liquidity",  header, color.white)
+    dashboardCell(1, 0,  syminfo.ticker,   header, color.white)
+
+    dashboardCell(0, 1,  "Weekly Bias",    body, dashboardText)
+    dashboardCell(1, 1,  biasText(weeklyBias), weeklyBg, color.white)
+
+    dashboardCell(0, 2,  "Daily Bias",     body, dashboardText)
+    dashboardCell(1, 2,  biasText(dailyBias), dailyBg, color.white)
+
+    dashboardCell(0, 3,  "Sweep State",    body, dashboardText)
+    dashboardCell(1, 3,  sweepText(sweepState), sweepBg, color.white)
+
+    dashboardCell(0, 4,  "H1 BOS",         body, dashboardText)
+    dashboardCell(1, 4,  biasShort(bosState), bosBg, color.white)
+
+    dashboardCell(0, 5,  "M15 Confirm",    body, dashboardText)
+    color m15Bg = bosState == BIAS_BULLISH and m15BullConfirmed ? bullBg :
+                  bosState == BIAS_BEARISH and m15BearConfirmed ? bearBg : neutral
+    string m15Text = bosState == BIAS_BULLISH ? (m15BullConfirmed ? "CONFIRMED" : "WAITING") :
+                     bosState == BIAS_BEARISH ? (m15BearConfirmed ? "CONFIRMED" : "WAITING") : "---"
+    dashboardCell(1, 5,  m15Text, m15Bg, color.white)
+
+    dashboardCell(0, 6,  "ATR",             body, dashboardText)
+    dashboardCell(1, 6,  str.tostring(atrPips, "#.0") + " pips", atrBg, color.white)
+
+    dashboardCell(0, 7,  "Session",         body, dashboardText)
+    dashboardCell(1, 7,  sessionText, sessionBg, color.white)
+
+    dashboardCell(0, 8,  "State",           body, dashboardText)
+    dashboardCell(1, 8,  stateText, setupUsed ? neutral : waitingRetrace ? color.new(tpColor, 70) : body, color.white)
+
+    // PART 7: Trade Status row
+    dashboardCell(0, 9,  "Trade Status",    body, dashboardText)
+    dashboardCell(1, 9,  tradeStatusText, tradeBg, color.white)
+
+    // PART 7: Last Alert row
+    dashboardCell(0, 10, "Last Alert",      body, dashboardText)
+    dashboardCell(1, 10, lastAlertText,     body, dashboardText)
+
+if not showDashboard and barstate.islast
+    table.clear(dashboard, 0, 0, 1, 10)
