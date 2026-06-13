@@ -408,7 +408,9 @@ def engineer_features(df):
 
 @st.cache_resource(show_spinner=False)
 def train_model(_df, feature_cols, fast_mode=False):
-    X = _df[feature_cols].values
+    # Accept both list and tuple (tuple needed for st.cache_resource hashing)
+    cols = list(feature_cols)
+    X = _df[cols].values
     y = _df["outcome"].values
     tscv = TimeSeriesSplit(n_splits=5)
     oof_preds = np.zeros((len(_df), 3))
@@ -419,12 +421,12 @@ def train_model(_df, feature_cols, fast_mode=False):
                subsample=0.8, colsample_bytree=0.8))
 
     for _, (tr, te) in enumerate(tscv.split(X)):
-        m = xgb.XGBClassifier(**hp, use_label_encoder=False,
+        m = xgb.XGBClassifier(**hp,
                                eval_metric="mlogloss", random_state=42, verbosity=0)
         m.fit(X[tr], y[tr])
         oof_preds[te] = m.predict_proba(X[te])
 
-    final = xgb.XGBClassifier(**hp, use_label_encoder=False,
+    final = xgb.XGBClassifier(**hp,
                                eval_metric="mlogloss", random_state=42, verbosity=0)
     final.fit(X, y)
     vm = oof_preds.sum(axis=1) > 0
@@ -583,7 +585,7 @@ def get_team_features(home, away, df, feature_cols, elo_ratings,
         "is_wc":int("World Cup" in tournament),
         "is_friendly":int("Friendly" in tournament),
     }
-    return np.array([feats[c] for c in feature_cols])
+    return np.array([feats[c] for c in list(feature_cols)])
 
 
 def ensemble_predict(home, away, df, feature_cols, elo_ratings,
