@@ -27,7 +27,325 @@ from sklearn.calibration import IsotonicRegression
 from sklearn.ensemble import RandomForestClassifier
 import xgboost as xgb
 from collections import defaultdict
+import os
 import random
+import difflib
+
+
+# =============================================================================
+# TEAM NAME NORMALIZER
+# Maps every app-facing display name → exact dataset name.
+# Add new aliases here whenever a mismatch is discovered.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Full alias table: APP/USER name  →  DATASET canonical name
+# Lookup is done case-insensitively + stripped so capitalization,
+# extra spaces, and minor accent differences are handled automatically.
+# ---------------------------------------------------------------------------
+# =============================================================================
+# TEAM REGISTRY — single source of truth for all 48 WC 2026 teams
+#
+# display_name  : FIFA-official / user-facing label shown in dropdowns & UI
+# dataset_name  : exact string used in martj42/international_results CSV
+# confederation : for the statistics table
+# flag          : emoji flag
+# =============================================================================
+
+# =============================================================================
+# CANONICAL TEAM REGISTRY  —  single source of truth for all 48 WC 2026 teams
+#
+# Key  = canonical name (used in QUALIFIED_TEAMS, dropdowns, WC2026_GROUPS)
+# Each entry:
+#   display_name  : shown in UI labels and dropdowns
+#   dataset_name  : exact string in martj42/international_results CSV
+#   confederation : AFC | CAF | CONCACAF | CONMEBOL | OFC | UEFA
+#   flag          : emoji flag
+#
+# Name-convention mappings:
+#   Canonical         →  dataset_name
+#   United States     →  United States   (hosts; stored correctly)
+#   Czechia           →  Czech Republic  (UEFA branding vs FIFA dataset)
+#   Côte d'Ivoire     →  Ivory Coast     (CAF official vs historical CSV)
+#   Cabo Verde        →  Cape Verde      (CAF official vs historical CSV)
+#   Curaçao           →  Curaçao         (stored with accent in CSV)
+#   Türkiye           →  Turkey          (UEFA branding vs historical CSV)
+#   DR Congo          →  DR Congo        (stored as DR Congo in CSV)
+#   IR Iran           →  Iran            (AFC code vs historical CSV)
+# =============================================================================
+
+TEAM_REGISTRY: dict[str, dict] = {
+    # ── Hosts (CONCACAF) ───────────────────────────────────────────────────
+    "Canada":        {"display_name": "Canada",        "dataset_name": "Canada",        "confederation": "CONCACAF", "flag": "🇨🇦"},
+    "Mexico":        {"display_name": "Mexico",        "dataset_name": "Mexico",        "confederation": "CONCACAF", "flag": "🇲🇽"},
+    "United States": {"display_name": "United States", "dataset_name": "United States", "confederation": "CONCACAF", "flag": "🇺🇸"},
+
+    # ── CAF — Africa (10 teams) ────────────────────────────────────────────
+    "Algeria":       {"display_name": "Algeria",       "dataset_name": "Algeria",       "confederation": "CAF",      "flag": "🇩🇿"},
+    "Cabo Verde":    {"display_name": "Cabo Verde",    "dataset_name": "Cape Verde",    "confederation": "CAF",      "flag": "🇨🇻"},
+    "Côte d'Ivoire": {"display_name": "Côte d'Ivoire", "dataset_name": "Ivory Coast",   "confederation": "CAF",      "flag": "🇨🇮"},
+    "DR Congo":      {"display_name": "DR Congo",      "dataset_name": "DR Congo",      "confederation": "CAF",      "flag": "🇨🇩"},
+    "Egypt":         {"display_name": "Egypt",         "dataset_name": "Egypt",         "confederation": "CAF",      "flag": "🇪🇬"},
+    "Ghana":         {"display_name": "Ghana",         "dataset_name": "Ghana",         "confederation": "CAF",      "flag": "🇬🇭"},
+    "Morocco":       {"display_name": "Morocco",       "dataset_name": "Morocco",       "confederation": "CAF",      "flag": "🇲🇦"},
+    "Senegal":       {"display_name": "Senegal",       "dataset_name": "Senegal",       "confederation": "CAF",      "flag": "🇸🇳"},
+    "South Africa":  {"display_name": "South Africa",  "dataset_name": "South Africa",  "confederation": "CAF",      "flag": "🇿🇦"},
+    "Tunisia":       {"display_name": "Tunisia",       "dataset_name": "Tunisia",       "confederation": "CAF",      "flag": "🇹🇳"},
+
+    # ── AFC — Asia (9 teams) ───────────────────────────────────────────────
+    "Australia":     {"display_name": "Australia",     "dataset_name": "Australia",     "confederation": "AFC",      "flag": "🇦🇺"},
+    "IR Iran":       {"display_name": "IR Iran",       "dataset_name": "Iran",          "confederation": "AFC",      "flag": "🇮🇷"},
+    "Iraq":          {"display_name": "Iraq",          "dataset_name": "Iraq",          "confederation": "AFC",      "flag": "🇮🇶"},
+    "Japan":         {"display_name": "Japan",         "dataset_name": "Japan",         "confederation": "AFC",      "flag": "🇯🇵"},
+    "Jordan":        {"display_name": "Jordan",        "dataset_name": "Jordan",        "confederation": "AFC",      "flag": "🇯🇴"},
+    "Qatar":         {"display_name": "Qatar",         "dataset_name": "Qatar",         "confederation": "AFC",      "flag": "🇶🇦"},
+    "Saudi Arabia":  {"display_name": "Saudi Arabia",  "dataset_name": "Saudi Arabia",  "confederation": "AFC",      "flag": "🇸🇦"},
+    "South Korea":   {"display_name": "South Korea",   "dataset_name": "South Korea",   "confederation": "AFC",      "flag": "🇰🇷"},
+    "Uzbekistan":    {"display_name": "Uzbekistan",    "dataset_name": "Uzbekistan",    "confederation": "AFC",      "flag": "🇺🇿"},
+
+    # ── CONMEBOL — South America (6 teams) ────────────────────────────────
+    "Argentina":     {"display_name": "Argentina",     "dataset_name": "Argentina",     "confederation": "CONMEBOL", "flag": "🇦🇷"},
+    "Brazil":        {"display_name": "Brazil",        "dataset_name": "Brazil",        "confederation": "CONMEBOL", "flag": "🇧🇷"},
+    "Colombia":      {"display_name": "Colombia",      "dataset_name": "Colombia",      "confederation": "CONMEBOL", "flag": "🇨🇴"},
+    "Ecuador":       {"display_name": "Ecuador",       "dataset_name": "Ecuador",       "confederation": "CONMEBOL", "flag": "🇪🇨"},
+    "Paraguay":      {"display_name": "Paraguay",      "dataset_name": "Paraguay",      "confederation": "CONMEBOL", "flag": "🇵🇾"},
+    "Uruguay":       {"display_name": "Uruguay",       "dataset_name": "Uruguay",       "confederation": "CONMEBOL", "flag": "🇺🇾"},
+
+    # ── CONCACAF non-hosts (3 teams) ──────────────────────────────────────
+    "Curaçao":       {"display_name": "Curaçao",       "dataset_name": "Curaçao",       "confederation": "CONCACAF", "flag": "🇨🇼"},
+    "Haiti":         {"display_name": "Haiti",         "dataset_name": "Haiti",         "confederation": "CONCACAF", "flag": "🇭🇹"},
+    "Panama":        {"display_name": "Panama",        "dataset_name": "Panama",        "confederation": "CONCACAF", "flag": "🇵🇦"},
+
+    # ── OFC — Oceania (1 team) ─────────────────────────────────────────────
+    "New Zealand":   {"display_name": "New Zealand",   "dataset_name": "New Zealand",   "confederation": "OFC",      "flag": "🇳🇿"},
+
+    # ── UEFA — Europe (16 teams) ───────────────────────────────────────────
+    "Austria":       {"display_name": "Austria",       "dataset_name": "Austria",       "confederation": "UEFA",     "flag": "🇦🇹"},
+    "Belgium":       {"display_name": "Belgium",       "dataset_name": "Belgium",       "confederation": "UEFA",     "flag": "🇧🇪"},
+    "Bosnia and Herzegovina": {"display_name": "Bosnia and Herzegovina", "dataset_name": "Bosnia and Herzegovina", "confederation": "UEFA", "flag": "🇧🇦"},
+    "Croatia":       {"display_name": "Croatia",       "dataset_name": "Croatia",       "confederation": "UEFA",     "flag": "🇭🇷"},
+    "Czechia":       {"display_name": "Czechia",       "dataset_name": "Czech Republic","confederation": "UEFA",     "flag": "🇨🇿"},
+    "England":       {"display_name": "England",       "dataset_name": "England",       "confederation": "UEFA",     "flag": "🏴󠁧󠁢󠁥󠁮󠁧󠁿"},
+    "France":        {"display_name": "France",        "dataset_name": "France",        "confederation": "UEFA",     "flag": "🇫🇷"},
+    "Germany":       {"display_name": "Germany",       "dataset_name": "Germany",       "confederation": "UEFA",     "flag": "🇩🇪"},
+    "Netherlands":   {"display_name": "Netherlands",   "dataset_name": "Netherlands",   "confederation": "UEFA",     "flag": "🇳🇱"},
+    "Norway":        {"display_name": "Norway",        "dataset_name": "Norway",        "confederation": "UEFA",     "flag": "🇳🇴"},
+    "Portugal":      {"display_name": "Portugal",      "dataset_name": "Portugal",      "confederation": "UEFA",     "flag": "🇵🇹"},
+    "Scotland":      {"display_name": "Scotland",      "dataset_name": "Scotland",      "confederation": "UEFA",     "flag": "🏴󠁧󠁢󠁳󠁣󠁴󠁿"},
+    "Spain":         {"display_name": "Spain",         "dataset_name": "Spain",         "confederation": "UEFA",     "flag": "🇪🇸"},
+    "Sweden":        {"display_name": "Sweden",        "dataset_name": "Sweden",        "confederation": "UEFA",     "flag": "🇸🇪"},
+    "Switzerland":   {"display_name": "Switzerland",   "dataset_name": "Switzerland",   "confederation": "UEFA",     "flag": "🇨🇭"},
+    "Türkiye":       {"display_name": "Türkiye",       "dataset_name": "Turkey",        "confederation": "UEFA",     "flag": "🇹🇷"},
+}
+
+# Silent startup assertion — catches registry errors immediately, never shown in UI
+assert len(TEAM_REGISTRY) == 48,  f"Expected 48 teams, got {len(TEAM_REGISTRY)}"
+assert all("display_name"  in v for v in TEAM_REGISTRY.values()), "Missing display_name"
+assert all("dataset_name"  in v for v in TEAM_REGISTRY.values()), "Missing dataset_name"
+assert all("confederation" in v for v in TEAM_REGISTRY.values()), "Missing confederation"
+assert all("flag"          in v for v in TEAM_REGISTRY.values()), "Missing flag"
+
+# ---------------------------------------------------------------------------
+# Derived helpers — always computed from TEAM_REGISTRY (single source of truth)
+# ---------------------------------------------------------------------------
+
+# Primary sorted list: confederation order then alphabetical within each
+QUALIFIED_TEAMS: list[str] = sorted(
+    TEAM_REGISTRY.keys(),
+    key=lambda t: (TEAM_REGISTRY[t]["confederation"], t),
+)
+
+# TEAM_FLAGS — keyed by canonical, display_name, and dataset_name for full coverage
+TEAM_FLAGS: dict[str, str] = {}
+for _cn, _rec in TEAM_REGISTRY.items():
+    TEAM_FLAGS[_cn]                  = _rec["flag"]
+    TEAM_FLAGS[_rec["display_name"]] = _rec["flag"]
+    TEAM_FLAGS[_rec["dataset_name"]] = _rec["flag"]
+
+# TEAM_NAME_MAP: any spelling variant (lowercase) → dataset_name
+TEAM_NAME_MAP: dict[str, str] = {}
+for _cn, _rec in TEAM_REGISTRY.items():
+    _ds = _rec["dataset_name"]
+    _dn = _rec["display_name"]
+    TEAM_NAME_MAP[_cn.strip().lower()] = _ds
+    TEAM_NAME_MAP[_dn.strip().lower()] = _ds
+    TEAM_NAME_MAP[_ds.strip().lower()] = _ds
+
+# Extra well-known aliases and abbreviations
+TEAM_NAME_MAP.update({
+    "usa":                    "United States",
+    "united states":          "United States",
+    "czechia":                "Czech Republic",
+    "czech republic":         "Czech Republic",
+    "ivory coast":            "Ivory Coast",
+    "cape verde":             "Cape Verde",
+    "cabo verde":             "Cape Verde",
+    "ir iran":                "Iran",
+    "iran":                   "Iran",
+    "south korea":            "South Korea",
+    "korea republic":         "South Korea",
+    "dr congo":               "DR Congo",
+    "congo dr":               "DR Congo",
+    "bosnia-herzegovina":     "Bosnia and Herzegovina",
+    "türkiye":                "Turkey",
+    "turkey":                 "Turkey",
+    "curaçao":                "Curaçao",
+    "curacao":                "Curaçao",
+})
+
+# Fast case-insensitive lookup dict
+_NORM_LOOKUP: dict[str, str] = {k: v for k, v in TEAM_NAME_MAP.items()}
+
+# Reverse map: dataset_name → canonical key (for display_name() function)
+DISPLAY_NAME_MAP: dict[str, str] = {
+    _rec["dataset_name"]: _cn for _cn, _rec in TEAM_REGISTRY.items()
+}
+
+def normalize(team: str) -> str:
+    """Return the dataset-canonical name for any team spelling variant."""
+    if not team:
+        return team
+    return _NORM_LOOKUP.get(team.strip().lower(), team)
+
+
+def display_name(dataset_team: str) -> str:
+    """Return the user-facing display name for a dataset team name."""
+    return DISPLAY_NAME_MAP.get(dataset_team, dataset_team)
+
+
+def ds(team: str) -> str:
+    """Shorthand: display name → dataset name (used everywhere in calculations)."""
+    return normalize(team)
+
+
+def validate_teams(df: "pd.DataFrame", teams: list) -> dict:
+    """Internal validation — not shown in UI."""
+    all_ds = set(df["home_team"]) | set(df["away_team"])
+    validated, aliased, missing = [], [], []
+    for app_name in teams:
+        ds_name = normalize(app_name)
+        if ds_name in all_ds:
+            validated.append((app_name, ds_name))
+            if app_name != ds_name:
+                aliased.append((app_name, ds_name))
+        else:
+            close = difflib.get_close_matches(app_name, all_ds, n=3, cutoff=0.5)
+            missing.append((app_name, close))
+    return {"validated": validated, "aliased": aliased, "missing": missing}
+
+
+
+
+def run_team_audit(df: "pd.DataFrame", dc_model=None, elo_ratings: dict = None) -> list[dict]:
+    """
+    Audit every team in QUALIFIED_TEAMS against the dataset.
+    Returns a list of dicts with full diagnostic info per team.
+    """
+    vresult    = validate_teams(df, QUALIFIED_TEAMS)
+    missing_map = {app: close for app, close in vresult["missing"]}
+    aliased_set = {app for app, _ in vresult["aliased"]}
+    all_ds      = set(df["home_team"]) | set(df["away_team"])
+    rows = []
+    for app_name in QUALIFIED_TEAMS:
+        ds_name  = normalize(app_name)
+        in_ds    = ds_name in all_ds
+        matches  = int(len(df[(df["home_team"]==ds_name)|(df["away_team"]==ds_name)])) if in_ds else 0
+        elo_ok   = (elo_ratings is not None) and (ds_name in elo_ratings)
+        att_ok   = (dc_model    is not None) and (ds_name in getattr(dc_model, "attack",  {}))
+        def_ok   = (dc_model    is not None) and (ds_name in getattr(dc_model, "defence", {}))
+        form_ok  = matches >= 5
+        h2h_ok   = in_ds
+        closest  = ", ".join(missing_map.get(app_name, [])) or "—"
+        rows.append({
+            "App Name":      app_name,
+            "Dataset Name":  ds_name,
+            "In Dataset":    "✅" if in_ds  else "❌",
+            "Closest Match": closest if not in_ds else "—",
+            "Matches":       matches,
+            "Elo":           "✅" if elo_ok  else "❌",
+            "Attack":        "✅" if att_ok  else "❌",
+            "Defence":       "✅" if def_ok  else "❌",
+            "Form":          "✅" if form_ok else "❌",
+            "H2H":           "✅" if h2h_ok  else "❌",
+            "Alias Used":    "⚠️ yes" if app_name in aliased_set else "—",
+        })
+    return rows
+
+
+def run_developer_coverage_report(df: "pd.DataFrame") -> None:
+    """
+    Internal startup integrity check — NEVER displayed in the Streamlit UI.
+    Runs silently at app startup and prints a developer coverage report to
+    stdout (visible in terminal / Streamlit Cloud logs only).
+
+    Performs the checks required by the consistency audit:
+      - len(QUALIFIED_TEAMS) == 48
+      - len(TEAM_REGISTRY) == 48
+      - every team resolves through normalize()
+      - every team's dataset_name exists in the historical dataset
+    Fails fast (raises) if any qualified team cannot be resolved at all,
+    since that would silently corrupt every downstream calculation.
+    """
+    assert len(QUALIFIED_TEAMS) == 48, f"QUALIFIED_TEAMS has {len(QUALIFIED_TEAMS)}, expected 48"
+    assert len(TEAM_REGISTRY)   == 48, f"TEAM_REGISTRY has {len(TEAM_REGISTRY)}, expected 48"
+
+    all_ds_teams = set(df["home_team"]) | set(df["away_team"])
+
+    missing_teams   = []
+    alias_fixes     = []
+    in_dataset_count = 0
+
+    for canonical in QUALIFIED_TEAMS:
+        rec     = TEAM_REGISTRY[canonical]
+        ds_name = rec["dataset_name"]
+
+        # normalize() must resolve the canonical name correctly
+        resolved = normalize(canonical)
+        if resolved != ds_name:
+            # normalize() disagrees with registry — developer bug, fail fast
+            raise RuntimeError(
+                f"normalize({canonical!r}) returned {resolved!r}, "
+                f"but TEAM_REGISTRY says dataset_name={ds_name!r}"
+            )
+
+        if ds_name in all_ds_teams:
+            in_dataset_count += 1
+            if canonical != ds_name:
+                alias_fixes.append(f"{canonical} -> {ds_name}")
+        else:
+            missing_teams.append(canonical)
+
+    report_lines = [
+        "",
+        "=" * 70,
+        "DEVELOPER COVERAGE REPORT (internal — not shown in Streamlit UI)",
+        "=" * 70,
+        f"Total Teams:          48",
+        f"Teams In Registry:    {len(TEAM_REGISTRY)}",
+        f"Teams In Dataset:     {in_dataset_count}",
+        f"Teams In Dropdown:    {len(QUALIFIED_TEAMS)}",
+        "",
+        f"Missing Teams: {missing_teams if missing_teams else '[]'}",
+        "",
+        "Alias Fixes Applied:",
+    ]
+    if alias_fixes:
+        report_lines.extend(f"  {a}" for a in alias_fixes)
+    else:
+        report_lines.append("  (none)")
+    report_lines.append("=" * 70)
+
+    print("\n".join(report_lines))
+
+    # Fail fast — a missing team means downstream Elo/Dixon-Coles/predictions
+    # for that team would silently default to 1500/zero, corrupting results.
+    if missing_teams:
+        raise RuntimeError(
+            f"DEVELOPER ERROR: {len(missing_teams)} qualified team(s) not found "
+            f"in dataset after normalization: {missing_teams}. "
+            f"Add the correct alias to TEAM_NAME_MAP / TEAM_REGISTRY."
+        )
+
 
 # =============================================================================
 # PAGE CONFIG  (must be first Streamlit call)
@@ -265,66 +583,116 @@ def inject_css(t):
 # 2026 WORLD CUP — 48 QUALIFIED TEAMS
 # =============================================================================
 
-QUALIFIED_TEAMS = [
-    # South America (6)
-    "Argentina", "Brazil", "Colombia", "Ecuador", "Uruguay", "Paraguay",
-    # Europe (16)
-    "France", "England", "Spain", "Germany", "Portugal", "Netherlands",
-    "Belgium", "Croatia", "Switzerland", "Austria", "Denmark", "Poland",
-    "Turkey", "Czechia", "Bosnia and Herzegovina", "Scotland",
-    # CONCACAF (6)
-    "USA", "Mexico", "Canada", "Jamaica", "Costa Rica", "Panama",
-    # Africa (9)
-    "Morocco", "Senegal", "Egypt", "Côte d'Ivoire", "DR Congo", "Ghana",
-    "Tunisia", "Nigeria", "Cameroon",
-    # Asia / AFC (8)
-    "Japan", "South Korea", "Saudi Arabia", "Qatar", "Iran", "Australia",
-    "Uzbekistan", "Jordan",
-    # Intercontinental play-off (3 — illustrative)
-    "New Zealand", "Venezuela", "Algeria",
-]
+# QUALIFIED_TEAMS and TEAM_FLAGS are now derived from TEAM_REGISTRY above.
 
-TEAM_FLAGS = {
-    "Argentina": "🇦🇷", "Brazil": "🇧🇷", "France": "🇫🇷", "England": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
-    "Spain": "🇪🇸", "Germany": "🇩🇪", "Portugal": "🇵🇹", "Netherlands": "🇳🇱",
-    "Belgium": "🇧🇪", "Croatia": "🇭🇷", "Uruguay": "🇺🇾", "Colombia": "🇨🇴",
-    "Mexico": "🇲🇽", "USA": "🇺🇸", "Canada": "🇨🇦", "Japan": "🇯🇵",
-    "South Korea": "🇰🇷", "Morocco": "🇲🇦", "Senegal": "🇸🇳", "Egypt": "🇪🇬",
-    "Australia": "🇦🇺", "Saudi Arabia": "🇸🇦", "Qatar": "🇶🇦", "Iran": "🇮🇷",
-    "Switzerland": "🇨🇭", "Austria": "🇦🇹", "Turkey": "🇹🇷", "Czechia": "🇨🇿",
-    "Côte d'Ivoire": "🇨🇮", "DR Congo": "🇨🇩", "Ghana": "🇬🇭", "Tunisia": "🇹🇳",
-    "Algeria": "🇩🇿", "Ecuador": "🇪🇨", "Paraguay": "🇵🇾", "Panama": "🇵🇦",
-    "Bosnia and Herzegovina": "🇧🇦", "Denmark": "🇩🇰", "Poland": "🇵🇱",
-    "Scotland": "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "Jamaica": "🇯🇲", "Costa Rica": "🇨🇷",
-    "Venezuela": "🇻🇪", "Nigeria": "🇳🇬", "Cameroon": "🇨🇲",
-    "Uzbekistan": "🇺🇿", "Jordan": "🇯🇴", "New Zealand": "🇳🇿",
-}
-
-def flag(team):
-    return TEAM_FLAGS.get(team, "🌍")
+def flag(team: str) -> str:
+    """Return emoji flag; accepts canonical, display, or dataset name."""
+    return TEAM_FLAGS.get(team,
+           TEAM_FLAGS.get(normalize(team),
+           TEAM_FLAGS.get(display_name(team), "🌍")))
 
 
 # =============================================================================
 # SECTION 1 — DATA LOADING
 # =============================================================================
 
+# Primary URL — GitHub raw CSV
 DATA_URL = "https://raw.githubusercontent.com/martj42/international_results/master/results.csv"
 
-@st.cache_data(show_spinner=False)
-def load_data():
-    df = pd.read_csv(DATA_URL)
+# Mirror URLs tried in order if primary fails
+DATA_MIRRORS = [
+    DATA_URL,
+    "https://github.com/martj42/international_results/raw/master/results.csv",
+]
+
+# Local cache path — next to the script so it persists across runs
+_SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
+LOCAL_CACHE   = os.path.join(_SCRIPT_DIR, "results_cache.csv")
+
+
+def _process_raw(df: pd.DataFrame) -> pd.DataFrame:
+    """Clean and feature-engineer a freshly loaded DataFrame."""
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date","home_team","away_team","home_score","away_score"])
     df["home_score"] = df["home_score"].astype(int)
     df["away_score"] = df["away_score"].astype(int)
-    df["result"] = np.where(
+    df["result"]  = np.where(
         df["home_score"] > df["away_score"], "H",
         np.where(df["home_score"] < df["away_score"], "A", "D")
     )
     df["outcome"] = df["result"].map({"H": 0, "D": 1, "A": 2})
     df = df.sort_values("date").reset_index(drop=True)
-    df["days_ago"] = (df["date"].max() - df["date"]).dt.days
+    df["days_ago"]       = (df["date"].max() - df["date"]).dt.days
+    df["home_team_norm"] = df["home_team"]
+    df["away_team_norm"] = df["away_team"]
     return df
+
+
+@st.cache_data(show_spinner=False)
+def load_data() -> pd.DataFrame:
+    """
+    Load international results with a three-tier fallback strategy:
+
+    1. Try each mirror URL (primary GitHub raw URL first)
+    2. If all URLs fail, load from local cache file (results_cache.csv)
+       placed in the same folder as this script
+    3. If no local cache exists either, raise a clear error with
+       instructions to manually download the file
+
+    The file is also saved locally after every successful download
+    so future runs work offline automatically.
+    """
+    last_err = None
+
+    # ── Tier 1: try network URLs ─────────────────────────────────────────────
+    for url in DATA_MIRRORS:
+        try:
+            import urllib.request
+            import io
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw_bytes = resp.read()
+            df = pd.read_csv(io.BytesIO(raw_bytes))
+            df = _process_raw(df)
+            # Save a local copy for offline use
+            try:
+                df.to_csv(LOCAL_CACHE, index=False)
+            except Exception:
+                pass   # non-fatal — just means offline fallback won't update
+            return df
+        except Exception as e:
+            last_err = e
+            continue
+
+    # ── Tier 2: local cache ──────────────────────────────────────────────────
+    if os.path.exists(LOCAL_CACHE):
+        try:
+            df = pd.read_csv(LOCAL_CACHE)
+            df = _process_raw(df)
+            st.warning(
+                "⚠️ **Offline mode** — could not reach GitHub. "
+                f"Using cached data from: `{LOCAL_CACHE}`  "
+                f"(last saved: {pd.Timestamp(os.path.getmtime(LOCAL_CACHE), unit='s').strftime('%Y-%m-%d %H:%M')})"
+            )
+            return df
+        except Exception as e:
+            last_err = e
+
+    # ── Tier 3: clear error with manual download instructions ────────────────
+    st.error(
+        "❌ **Cannot load match data.**\n\n"
+        "**Network error:** " + str(last_err) + "\n\n"
+        "**To fix — choose one option:**\n\n"
+        "**Option A — Fix your internet connection** then restart the app.\n\n"
+        "**Option B — Download the file manually:**\n"
+        "1. Open this URL in your browser:\n"
+        "   https://raw.githubusercontent.com/martj42/international_results/master/results.csv\n"
+        "2. Save the file as `results_cache.csv`\n"
+        f"3. Place it here: `{_SCRIPT_DIR}\\results_cache.csv`\n"
+        "4. Restart the app — it will load from the local file automatically.\n\n"
+        "**Option C — Use a VPN** if GitHub is blocked in your region."
+    )
+    st.stop()
 
 
 # =============================================================================
@@ -521,6 +889,8 @@ class DixonColesTimeDecay:
         return self
 
     def predict(self, home, away, neutral=False):
+        home = normalize(home)
+        away = normalize(away)
         hb  = 0.0 if neutral else self.home_adv
         lh  = np.exp(hb + self.attack.get(home,0.) - self.defence.get(away,0.))
         la  = np.exp(     self.attack.get(away,0.) - self.defence.get(home,0.))
@@ -554,6 +924,10 @@ def fit_dixon_coles(_df):
 
 def get_team_features(home, away, df, feature_cols, elo_ratings,
                       neutral=False, tournament="FIFA World Cup"):
+    # Resolve dataset-canonical names before every lookup
+    home = normalize(home)
+    away = normalize(away)
+
     def stats(rows, team):
         gs,gc,pts=[],[],[]
         for _,r in rows.iterrows():
@@ -567,8 +941,8 @@ def get_team_features(home, away, df, feature_cols, elo_ratings,
                 np.mean(gc) if gc else 1.0,
                 np.mean(pts) if pts else 1.0)
 
-    hr = df[(df["home_team"]==home)|(df["away_team"]==home)].tail(15)
-    ar = df[(df["home_team"]==away)|(df["away_team"]==away)].tail(15)
+    hr = df[(df["home_team_norm"]==home)|(df["away_team_norm"]==home)].tail(15)
+    ar = df[(df["home_team_norm"]==away)|(df["away_team_norm"]==away)].tail(15)
     h_gs,h_gc,h_pts = stats(hr, home)
     a_gs,a_gc,a_pts = stats(ar, away)
     elo_h = elo_ratings.get(home, 1500)
@@ -591,6 +965,8 @@ def get_team_features(home, away, df, feature_cols, elo_ratings,
 def ensemble_predict(home, away, df, feature_cols, elo_ratings,
                      model, calibrator, dc_model,
                      neutral=False, tournament="FIFA World Cup", dc_w=0.55):
+    home = normalize(home)
+    away = normalize(away)
     dc      = dc_model.predict(home, away, neutral=neutral)
     fv      = get_team_features(home, away, df, feature_cols, elo_ratings,
                                 neutral=neutral, tournament=tournament)
@@ -620,8 +996,10 @@ def most_likely_score(S):
 # =============================================================================
 
 def head_to_head(df, a, b, n=10):
-    mask = (((df["home_team"]==a)&(df["away_team"]==b))|
-            ((df["home_team"]==b)&(df["away_team"]==a)))
+    """Lookup H2H using dataset-canonical names so aliases always resolve."""
+    a = normalize(a); b = normalize(b)
+    mask = (((df["home_team_norm"]==a)&(df["away_team_norm"]==b))|
+            ((df["home_team_norm"]==b)&(df["away_team_norm"]==a)))
     return df[mask].sort_values("date", ascending=False).head(n)
 
 
@@ -629,48 +1007,104 @@ def head_to_head(df, a, b, n=10):
 # SECTION 9 — TEAM STRENGTH TABLE
 # =============================================================================
 
-def build_strength_table(df, elo_ratings):
+def build_strength_table(df: "pd.DataFrame", elo_ratings: dict,
+                         dc_model=None) -> "pd.DataFrame":
+    """
+    Build the full Team Statistics table for all 48 qualified teams.
+    Columns: Team, Confederation, Matches, W, D, L, GF, GA, GD,
+             Win%, Elo, Attack, Defence
+    All dataset lookups use normalize() so aliases are handled automatically.
+    """
     rows = []
-    for team in QUALIFIED_TEAMS:
-        elo    = elo_ratings.get(team, 1500)
-        recent = df[(df["home_team"]==team)|(df["away_team"]==team)].sort_values("date").tail(20)
-        w=d=l=gf=ga=0
-        for _,r in recent.iterrows():
-            if r["home_team"]==team:
-                gf+=r["home_score"]; ga+=r["away_score"]
-                if r["result"]=="H": w+=1
-                elif r["result"]=="D": d+=1
-                else: l+=1
+    for canonical in QUALIFIED_TEAMS:
+        rec     = TEAM_REGISTRY[canonical]
+        ds_name = rec["dataset_name"]
+        conf    = rec["confederation"]
+        elo     = round(elo_ratings.get(ds_name, 1500))
+
+        # All matches for last-date lookup (full history, not just tail 30)
+        all_matches = df[
+            (df["home_team_norm"] == ds_name) |
+            (df["away_team_norm"] == ds_name)
+        ].sort_values("date")
+
+        recent = all_matches.tail(30)
+
+        w = d = l = gf = ga = 0
+        for _, r in recent.iterrows():
+            if r["home_team_norm"] == ds_name:
+                gf += r["home_score"]; ga += r["away_score"]
+                if r["result"] == "H": w += 1
+                elif r["result"] == "D": d += 1
+                else: l += 1
             else:
-                gf+=r["away_score"]; ga+=r["home_score"]
-                if r["result"]=="A": w+=1
-                elif r["result"]=="D": d+=1
-                else: l+=1
-        p = w+d+l
-        rows.append({"Team":team,"Elo":round(elo),"W":w,"D":d,"L":l,
-                     "GF":gf,"GA":ga,"GD":gf-ga,
-                     "Win%":round(w/p*100,1) if p else 0})
-    return pd.DataFrame(rows).sort_values("Elo",ascending=False).reset_index(drop=True)
+                gf += r["away_score"]; ga += r["home_score"]
+                if r["result"] == "A": w += 1
+                elif r["result"] == "D": d += 1
+                else: l += 1
+
+        played     = w + d + l
+        att        = round(getattr(dc_model, "attack",  {}).get(ds_name, 0.0), 4) if dc_model else 0.0
+        deff       = round(getattr(dc_model, "defence", {}).get(ds_name, 0.0), 4) if dc_model else 0.0
+        avg_gs     = round(gf / played, 2) if played else 0.0
+        avg_gc     = round(ga / played, 2) if played else 0.0
+        last_date  = all_matches["date"].max().strftime("%Y-%m-%d") if len(all_matches) else "N/A"
+        total_mp   = len(all_matches)   # full career matches for "most experienced" card
+
+        rows.append({
+            "Flag":           rec["flag"],
+            "Team":           canonical,
+            "Confederation":  conf,
+            "Matches Played": played,
+            "W":              w,
+            "D":              d,
+            "L":              l,
+            "Goals For":      gf,
+            "Goals Against":  ga,
+            "GD":             gf - ga,
+            "Win %":          round(w / played * 100, 1) if played else 0.0,
+            "Avg GS":         avg_gs,
+            "Avg GC":         avg_gc,
+            "Elo":            elo,
+            "Attack":         att,
+            "Defence":        deff,
+            "Last Match":     last_date,
+            "_total_mp":      total_mp,   # internal — filtered from display
+        })
+
+    return (pd.DataFrame(rows)
+              .sort_values("Elo", ascending=False)
+              .reset_index(drop=True))
+
 
 
 # =============================================================================
 # SECTION 10 — TOURNAMENT SIMULATOR
 # =============================================================================
 
+# Official 2026 FIFA World Cup group draw (BBC Sport, June 2026).
+# Every key is a TEAM_REGISTRY canonical name — verified against TEAM_REGISTRY.
+# Simulation uses normalize(team) internally so dataset_name is always resolved.
 WC2026_GROUPS = {
-    "A": ["USA",        "Morocco",          "Poland",               "Panama"],
-    "B": ["Mexico",     "Argentina",        "Cameroon",             "Jamaica"],
-    "C": ["Canada",     "Brazil",           "Belgium",              "New Zealand"],
-    "D": ["France",     "Uruguay",          "South Korea",          "Algeria"],
-    "E": ["Spain",      "Germany",          "Japan",                "Costa Rica"],
-    "F": ["Portugal",   "Colombia",         "Saudi Arabia",         "Tunisia"],
-    "G": ["England",    "Netherlands",      "Iran",                 "Venezuela"],
-    "H": ["Croatia",    "Ecuador",          "Senegal",              "Scotland"],
-    "I": ["Switzerland","Paraguay",         "Egypt",                "Jordan"],
-    "J": ["Austria",    "Denmark",          "Nigeria",              "Australia"],
-    "K": ["Turkey",     "Czechia",          "DR Congo",             "Uzbekistan"],
-    "L": ["Bosnia and Herzegovina","Côte d'Ivoire","Qatar",         "Ghana"],
+    "A": ["Mexico",                   "South Korea",    "Czechia",          "South Africa"],
+    "B": ["Switzerland",              "Canada",         "Qatar",            "Bosnia and Herzegovina"],
+    "C": ["Scotland",                 "Morocco",        "Brazil",           "Haiti"],
+    "D": ["United States",            "Australia",      "Türkiye",          "Paraguay"],
+    "E": ["Germany",                  "Côte d'Ivoire",  "Ecuador",          "Curaçao"],
+    "F": ["Sweden",                   "Japan",          "Netherlands",      "Tunisia"],
+    "G": ["New Zealand",              "IR Iran",        "Belgium",          "Egypt"],
+    "H": ["Uruguay",                  "Saudi Arabia",   "Spain",            "Cabo Verde"],
+    "I": ["Norway",                   "France",         "Senegal",          "Iraq"],
+    "J": ["Argentina",                "Austria",        "Jordan",           "Algeria"],
+    "K": ["Portugal",                 "DR Congo",       "Uzbekistan",       "Colombia"],
+    "L": ["England",                  "Croatia",        "Ghana",            "Panama"],
 }
+
+# Silent integrity check — catches any future typo immediately
+_all_grp = [t for teams in WC2026_GROUPS.values() for t in teams]
+assert len(_all_grp) == 48,                     f"Groups have {len(_all_grp)} teams, expected 48"
+assert len(set(_all_grp)) == 48,                "Duplicate team in WC2026_GROUPS"
+assert all(t in TEAM_REGISTRY for t in _all_grp),     "WC2026_GROUPS team not in TEAM_REGISTRY: " + str([t for t in _all_grp if t not in TEAM_REGISTRY])
 
 def _ko_match(h, a, dc_model):
     pred = dc_model.predict(h, a, neutral=True)
@@ -895,6 +1329,9 @@ def main():
     # ================================================================
 
     with st.spinner("📡 Downloading match data..."): df_raw = load_data()
+
+    # Silent startup integrity check — never shown in UI, logs to console only
+    run_developer_coverage_report(df_raw)
     with st.spinner("📐 Computing Elo ratings..."): df_elo, elo_ratings = compute_elo(df_raw)
     with st.spinner("🔧 Engineering features..."): df_feat, feature_cols = engineer_features(df_elo)
     with st.spinner("🤖 Training XGBoost..."):
@@ -924,22 +1361,42 @@ def main():
     # TABS
     # ================================================================
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🔮 Match Predictor","🏆 Tournament Simulator","📊 Team Rankings","ℹ️ Methodology"
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "🔮 Match Predictor","🏆 Tournament Simulator","📊 Team Rankings",
+        "📊 Dataset Coverage","ℹ️ Methodology",
     ])
+
+    # Build alphabetical, flag-prefixed dropdown list once (outside tab)
+    _sorted_teams  = sorted(QUALIFIED_TEAMS, key=lambda x: normalize(x))
+    _team_labels   = [f"{flag(t)} {t}" for t in _sorted_teams]
+    _label_to_name = {f"{flag(t)} {t}": t for t in _sorted_teams}
 
     # ---- TAB 1: MATCH PREDICTOR ----
     with tab1:
         st.markdown('<div class="section-header">⚽ Select Match Parameters</div>',
                     unsafe_allow_html=True)
+
         col_l, col_r = st.columns([1,2])
 
         with col_l:
-            home_team = st.selectbox("🏠 Home / Team A", QUALIFIED_TEAMS,
-                                     index=QUALIFIED_TEAMS.index("Argentina"))
-            away_opts = [x for x in QUALIFIED_TEAMS if x != home_team]
-            away_team = st.selectbox("✈️ Away / Team B", away_opts,
-                                     index=away_opts.index("France") if "France" in away_opts else 0)
+            _default_h = f"{flag('Argentina')} Argentina"
+            home_label = st.selectbox(
+                "🏠 Home / Team A",
+                _team_labels,
+                index=_team_labels.index(_default_h) if _default_h in _team_labels else 0,
+                help="Type to search",
+            )
+            home_team = _label_to_name[home_label]
+
+            _away_labels = [l for l in _team_labels if l != home_label]
+            _default_a   = f"{flag('France')} France"
+            away_label = st.selectbox(
+                "✈️ Away / Team B",
+                _away_labels,
+                index=_away_labels.index(_default_a) if _default_a in _away_labels else 0,
+                help="Type to search",
+            )
+            away_team = _label_to_name[away_label]
             venue = st.radio("📍 Venue", ["Neutral Ground","Home Advantage"], horizontal=True)
             stage = st.selectbox("🏟️ Stage",
                                  ["Group Stage","Round of 32","Quarter-Final","Semi-Final","Final"])
@@ -1015,7 +1472,7 @@ def main():
                 st.info(f"No H2H data found for {home_team} vs {away_team}.")
             else:
                 for _,r in h2h.iterrows():
-                    is_home = r["home_team"]==home_team
+                    is_home = r["home_team"]==normalize(home_team)
                     rc = (t["green"] if (is_home and r["result"]=="H") or (not is_home and r["result"]=="A")
                           else t["orange"] if r["result"]=="D" else t["red"])
                     st.markdown(f"""
@@ -1106,42 +1563,282 @@ def main():
     with tab3:
         st.markdown('<div class="section-header">📊 Team Strength & Rankings</div>',
                     unsafe_allow_html=True)
+
         with st.spinner("Building strength table..."):
-            sdf = build_strength_table(df_raw, elo_ratings)
-        st.plotly_chart(elo_scatter(sdf, t), use_container_width=True)
+            sdf = build_strength_table(df_raw, elo_ratings, dc_model=dc_model)
 
-        st.markdown('<div class="section-header">📋 Full Rankings Table</div>',
-                    unsafe_allow_html=True)
-        search = st.text_input("🔍 Filter team", placeholder="Type team name...")
-        ddf = sdf[sdf["Team"].str.contains(search, case=False)] if search else sdf.copy()
-        ddf.insert(0,"Rank",range(1,len(ddf)+1))
+        # ── Elo vs Win% scatter ──────────────────────────────────────────────
+        _scatter_df = sdf.rename(columns={
+            "Win %": "Win%", "Matches Played": "Matches",
+            "Goals For": "GF", "Goals Against": "GA"
+        })
+        st.plotly_chart(elo_scatter(_scatter_df, t), use_container_width=True)
 
-        hcols = st.columns([1,4,2,1,1,1,1,1,1,2])
-        for hc,hl in zip(hcols,["#","Team","Elo","W","D","L","GF","GA","GD","Win%"]):
-            hc.markdown(f"<span style='color:{t['muted_text']};font-size:0.78rem;"
-                        f"text-transform:uppercase;'>{hl}</span>", unsafe_allow_html=True)
-
-        for _,row in ddf.head(48).iterrows():
-            ec = t["accent"] if row["Elo"]>1700 else t["accent2"] if row["Elo"]>1600 else t["muted_text"]
-            rc = st.columns([1,4,2,1,1,1,1,1,1,2])
-            for ci,v in zip(rc,[
-                f"<b style='color:{t['accent']}'>{int(row['Rank'])}</b>",
-                f"{flag(row['Team'])} {row['Team']}",
-                f"<span style='color:{ec}'>{int(row['Elo'])}</span>",
-                str(int(row['W'])),str(int(row['D'])),str(int(row['L'])),
-                str(int(row['GF'])),str(int(row['GA'])),
-                f"{'+'if row['GD']>0 else ''}{int(row['GD'])}",
-                f"<b>{row['Win%']}%</b>",
-            ]):
-                ci.markdown(
-                    f"<div style='padding:6px 0;border-bottom:1px solid {t['row_border']};"
-                    f"color:{t['body_text']};font-size:0.86rem;'>{v}</div>",
+        # ── Team Statistics table ────────────────────────────────────────────
+        st.markdown('<div class="section-header">📋 Team Statistics</div>',
                     unsafe_allow_html=True)
 
-    # ---- TAB 4: METHODOLOGY ----
+        _sort_opts = {
+            "Elo (desc)":          ("Elo",           False),
+            "Matches Played":      ("Matches Played",False),
+            "Win % (desc)":        ("Win %",         False),
+            "Goals For (desc)":    ("Goals For",     False),
+            "Goal Difference":     ("GD",            False),
+            "Attack Rating":       ("Attack",        False),
+            "Defence Rating":      ("Defence",       False),
+            "Alphabetical":        ("Team",          True),
+        }
+        _r1, _r2 = st.columns([2, 2])
+        with _r1:
+            _confs  = ["All"] + sorted(sdf["Confederation"].unique().tolist())
+            _cf_sel = st.selectbox("Filter by Confederation", _confs, index=0)
+        with _r2:
+            _sort_sel = st.selectbox("Sort by", list(_sort_opts.keys()), index=0)
+
+        # Fuzzy + alias search: matches canonical name, display aliases, and
+        # any TEAM_NAME_MAP key that maps to this team's dataset_name
+        _search = st.text_input("🔍 Search (supports aliases: usa, ivory, czech, cap, tur…)",
+                                placeholder="Type team name or alias…")
+
+        def _fuzzy_match(team_canonical: str, query: str) -> bool:
+            """Return True if query matches any name variant for this team."""
+            q = query.strip().lower()
+            if not q:
+                return True
+            rec = TEAM_REGISTRY[team_canonical]
+            # Check canonical, display, dataset names
+            candidates = [
+                team_canonical.lower(),
+                rec["display_name"].lower(),
+                rec["dataset_name"].lower(),
+            ]
+            # Also check all TEAM_NAME_MAP keys that resolve to this dataset_name
+            ds = rec["dataset_name"]
+            for alias_key, alias_ds in TEAM_NAME_MAP.items():
+                if alias_ds == ds:
+                    candidates.append(alias_key.lower())
+            return any(q in c for c in candidates)
+
+        _tdf = sdf.copy()
+        if _cf_sel != "All":
+            _tdf = _tdf[_tdf["Confederation"] == _cf_sel]
+        if _search:
+            _tdf = _tdf[_tdf["Team"].apply(lambda t: _fuzzy_match(t, _search))]
+
+        _sort_col, _sort_asc = _sort_opts[_sort_sel]
+        _tdf = _tdf.sort_values(_sort_col, ascending=_sort_asc).reset_index(drop=True)
+        _tdf.insert(0, "Rank", range(1, len(_tdf) + 1))
+
+        _display_cols = [
+            "Rank", "Flag", "Team", "Confederation",
+            "Matches Played", "W", "D", "L",
+            "Goals For", "Goals Against", "GD", "Win %",
+            "Avg GS", "Avg GC", "Elo", "Attack", "Defence", "Last Match",
+        ]
+
+        st.dataframe(
+            _tdf[_display_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Rank":           st.column_config.NumberColumn("Rank",     width="small"),
+                "Flag":           st.column_config.TextColumn("",           width="small"),
+                "Team":           st.column_config.TextColumn("Team",       width="medium"),
+                "Confederation":  st.column_config.TextColumn("Conf.",      width="small"),
+                "Matches Played": st.column_config.NumberColumn("MP",       width="small"),
+                "W":              st.column_config.NumberColumn("W",        width="small"),
+                "D":              st.column_config.NumberColumn("D",        width="small"),
+                "L":              st.column_config.NumberColumn("L",        width="small"),
+                "Goals For":      st.column_config.NumberColumn("GF",       width="small"),
+                "Goals Against":  st.column_config.NumberColumn("GA",       width="small"),
+                "GD":             st.column_config.NumberColumn("GD",       width="small"),
+                "Win %":          st.column_config.NumberColumn("Win %",    width="small", format="%.1f%%"),
+                "Avg GS":         st.column_config.NumberColumn("Avg GS",   width="small", format="%.2f"),
+                "Avg GC":         st.column_config.NumberColumn("Avg GC",   width="small", format="%.2f"),
+                "Elo":            st.column_config.NumberColumn("Elo",      width="small"),
+                "Attack":         st.column_config.NumberColumn("Attack",   width="small", format="%.4f"),
+                "Defence":        st.column_config.NumberColumn("Defence",  width="small", format="%.4f"),
+                "Last Match":     st.column_config.TextColumn("Last Match", width="small"),
+            },
+        )
+        st.caption(f"Showing {len(_tdf)} of 48 teams · Last 30 matches per team · {_sort_sel}")
+
+    # ---- TAB 4: DATASET COVERAGE ──────────────────────────────────────────
+    # Internal audit runs silently — never displayed to users
     with tab4:
+        st.markdown('<div class="section-header">📊 Dataset Coverage</div>',
+                    unsafe_allow_html=True)
+
+        # ── Build coverage table directly from historical dataset ────────────
+        _all_ds_teams = set(df_raw["home_team"]) | set(df_raw["away_team"])
+        _cov_rows = []
+        for canonical in QUALIFIED_TEAMS:
+            rec     = TEAM_REGISTRY[canonical]
+            ds_name = rec["dataset_name"]
+            in_ds   = ds_name in _all_ds_teams
+            _team_df = df_raw[
+                (df_raw["home_team"] == ds_name) | (df_raw["away_team"] == ds_name)
+            ].sort_values("date")
+
+            mp = len(_team_df)
+            w2 = d2 = l2 = gf2 = ga2 = 0
+            for _, _r in _team_df.iterrows():
+                if _r["home_team"] == ds_name:
+                    gf2 += _r["home_score"]; ga2 += _r["away_score"]
+                    if _r["result"]=="H": w2+=1
+                    elif _r["result"]=="D": d2+=1
+                    else: l2+=1
+                else:
+                    gf2 += _r["away_score"]; ga2 += _r["home_score"]
+                    if _r["result"]=="A": w2+=1
+                    elif _r["result"]=="D": d2+=1
+                    else: l2+=1
+
+            last = _team_df["date"].max().strftime("%Y-%m-%d") if mp else "N/A"
+            elo_val = round(elo_ratings.get(ds_name, 1500))
+
+            _cov_rows.append({
+                "Flag":           rec["flag"],
+                "Team":           canonical,
+                "Confederation":  rec["confederation"],
+                "Dataset Name":   ds_name,
+                "In Dataset":     "✅" if in_ds else "❌",
+                "Matches Played": mp,
+                "Wins":           w2,
+                "Draws":          d2,
+                "Losses":         l2,
+                "Goals For":      gf2,
+                "Goals Against":  ga2,
+                "GD":             gf2 - ga2,
+                "Win %":          round(w2/mp*100,1) if mp else 0.0,
+                "Last Match":     last,
+                "Elo":            elo_val,
+            })
+
+        _cov_df = pd.DataFrame(_cov_rows)
+        _found  = _cov_df["In Dataset"].eq("✅").sum()
+
+        # ── Summary cards ────────────────────────────────────────────────────
+        _high_elo = _cov_df.loc[_cov_df["Elo"].idxmax(), "Team"]
+        _low_elo  = _cov_df.loc[_cov_df["Elo"].idxmin(), "Team"]
+        _most_exp = _cov_df.loc[_cov_df["Matches Played"].idxmax(), "Team"]
+        _least_exp= _cov_df.loc[_cov_df["Matches Played"].idxmin(), "Team"]
+        _avg_mp   = round(_cov_df["Matches Played"].mean(), 1)
+
+        _sc = st.columns(4)
+        for _col, _lbl, _val, _sub in zip(_sc, [
+            "🌍 WC Teams", "✅ In Dataset", "📈 Avg Matches", "🏆 Highest Elo",
+        ], [
+            "48", str(_found), str(_avg_mp), _high_elo,
+        ], [
+            "2026 qualified", f"of 48 teams", "per team (all-time)", f"Elo: {_cov_df['Elo'].max()}",
+        ]):
+            _col.markdown(f"""<div class="metric-card">
+                <div class="label">{_lbl}</div>
+                <div class="value">{_val}</div>
+                <div class="sub">{_sub}</div></div>""", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        _sc2 = st.columns(4)
+        for _col, _lbl, _val, _sub in zip(_sc2, [
+            "📉 Lowest Elo", "🎖️ Most Experienced", "🆕 Least Experienced", "📅 Dataset Matches",
+        ], [
+            _low_elo, _most_exp, _least_exp,
+            f"{len(df_raw):,}",
+        ], [
+            f"Elo: {_cov_df['Elo'].min()}",
+            f"{_cov_df['Matches Played'].max()} matches",
+            f"{_cov_df['Matches Played'].min()} matches",
+            "total international",
+        ]):
+            _col.markdown(f"""<div class="metric-card">
+                <div class="label">{_lbl}</div>
+                <div class="value">{_val}</div>
+                <div class="sub">{_sub}</div></div>""", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── Coverage filters ─────────────────────────────────────────────────
+        st.markdown('<div class="section-header">📋 Dataset Verification Table</div>',
+                    unsafe_allow_html=True)
+
+        _d1, _d2, _d3 = st.columns([2, 2, 2])
+        with _d1:
+            _dc_conf = st.selectbox("Confederation", ["All"]+sorted(_cov_df["Confederation"].unique().tolist()),
+                                    key="dc_conf")
+        with _d2:
+            _dc_sort_opts = {
+                "Elo (desc)":       ("Elo",            False),
+                "Matches Played":   ("Matches Played", False),
+                "Win % (desc)":     ("Win %",          False),
+                "Alphabetical":     ("Team",           True),
+            }
+            _dc_sort = st.selectbox("Sort by", list(_dc_sort_opts.keys()), key="dc_sort")
+        with _d3:
+            _dc_search = st.text_input("🔍 Search team", placeholder="Type alias or name…", key="dc_search")
+
+        _tdf2 = _cov_df.copy()
+        if _dc_conf != "All":
+            _tdf2 = _tdf2[_tdf2["Confederation"] == _dc_conf]
+        if _dc_search:
+            _tdf2 = _tdf2[_tdf2["Team"].apply(
+                lambda t: any(_dc_search.strip().lower() in c for c in [
+                    t.lower(),
+                    TEAM_REGISTRY[t]["display_name"].lower(),
+                    TEAM_REGISTRY[t]["dataset_name"].lower(),
+                ] + [k for k,v in TEAM_NAME_MAP.items() if v == TEAM_REGISTRY[t]["dataset_name"]])
+            )]
+
+        _dc_sc, _dc_asc = _dc_sort_opts[_dc_sort]
+        _tdf2 = _tdf2.sort_values(_dc_sc, ascending=_dc_asc).reset_index(drop=True)
+
+        # Color rows by data quality: green ≥50, yellow 20–49, red <20
+        def _cov_style(row):
+            mp = row["Matches Played"]
+            if mp >= 50:
+                return [f"color:#48bb78"] * len(row)   # green
+            if mp >= 20:
+                return [f"color:#ed8936"] * len(row)   # amber
+            return [f"color:#fc8181"] * len(row)        # red
+
+        _cov_display = [
+            "Flag","Team","Confederation","Dataset Name","In Dataset",
+            "Matches Played","Wins","Draws","Losses",
+            "Goals For","Goals Against","GD","Win %","Last Match","Elo",
+        ]
+
+        st.dataframe(
+            _tdf2[_cov_display].style.apply(_cov_style, axis=1),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Flag":           st.column_config.TextColumn("",            width="small"),
+                "Team":           st.column_config.TextColumn("Team",        width="medium"),
+                "Confederation":  st.column_config.TextColumn("Conf.",       width="small"),
+                "Dataset Name":   st.column_config.TextColumn("Dataset Name",width="medium"),
+                "In Dataset":     st.column_config.TextColumn("In DB",       width="small"),
+                "Matches Played": st.column_config.NumberColumn("MP",        width="small"),
+                "Wins":           st.column_config.NumberColumn("W",         width="small"),
+                "Draws":          st.column_config.NumberColumn("D",         width="small"),
+                "Losses":         st.column_config.NumberColumn("L",         width="small"),
+                "Goals For":      st.column_config.NumberColumn("GF",        width="small"),
+                "Goals Against":  st.column_config.NumberColumn("GA",        width="small"),
+                "GD":             st.column_config.NumberColumn("GD",        width="small"),
+                "Win %":          st.column_config.NumberColumn("Win %",     width="small", format="%.1f%%"),
+                "Last Match":     st.column_config.TextColumn("Last Match",  width="small"),
+                "Elo":            st.column_config.NumberColumn("Elo",       width="small"),
+            },
+        )
+        st.caption(
+            "🟢 Green = ≥50 matches · 🟡 Amber = 20–49 matches · 🔴 Red = <20 matches  "
+            f"| Showing {len(_tdf2)} of 48 teams | Source: martj42/international_results"
+        )
+
+    # ---- TAB 5: METHODOLOGY ──────────────────────────────────────────────
+    with tab5:
         st.markdown('<div class="section-header">📖 Model Architecture & Methodology</div>',
                     unsafe_allow_html=True)
+
         for heading,body in [
             ("🧠 Ensemble Design",
              """This predictor uses a <b>log-odds ensemble</b>:<br>
