@@ -1,0 +1,971 @@
+//@version=6
+indicator("SMC Liquidity Sweep Pro V8 - Institutional Assistant", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// =====================================================================================
+// V8 — INSTITUTIONAL TRADING ASSISTANT
+// This version does NOT generate BUY/SELL recommendations, confidence scores, or a
+// trade grade. It reports market conditions only (bias, structure, liquidity, FVG/OB,
+// premium-discount, session) so the trader makes the final discretionary decision.
+// V7 is untouched — this is a separate, ground-up rebuild.
+// =====================================================================================
+
+//==========================================================================
+// INPUTS
+//==========================================================================
+
+groupStructure = "Structure Settings"
+swingLookback      = input.int(5, "H1 Swing Lookback", minval=2, maxval=50, group=groupStructure)
+displacementPct     = input.float(60.0, "Displacement Body Percent", minval=1.0, maxval=100.0, step=1.0, group=groupStructure)
+minWickPips         = input.float(5.0, "Minimum Sweep Wick Pips", minval=0.0, step=0.25, group=groupStructure)
+minAtrFraction       = input.float(0.30, "Minimum ATR Fraction For Sweep", minval=0.0, step=0.05, group=groupStructure)
+htfConsolidationMult = input.float(1.2, "Daily/H4 Consolidation ATR Multiplier", minval=0.2, step=0.1, group=groupStructure)
+weeklyConsolidationMult = input.float(1.5, "Weekly Consolidation ATR Multiplier", minval=0.2, step=0.1, group=groupStructure)
+
+groupAtr = "ATR System"
+atrPeriod    = input.int(14, "ATR Period", minval=1, group=groupAtr)
+minAtrPips   = input.float(5.0, "Minimum ATR In Pips", minval=0.0, step=0.25, group=groupAtr)
+pipMultiplier = input.float(10.0, "Pip Multiplier", minval=1.0, step=1.0, group=groupAtr)
+
+groupSessions = "Killzones"
+showKillzones   = input.bool(true, "Shade Killzones", group=groupSessions)
+brokerUtcOffset = input.int(3, "Broker UTC Offset (reference only, for display)", group=groupSessions)
+
+useAsia = input.bool(true, "Asia Killzone", group=groupSessions)
+asiaSession = input.session("2300-0300", "Asia Session (UTC)", group=groupSessions)
+asiaKzColor = input.color(color.rgb(214, 33, 108), "Asia Color", group=groupSessions)
+
+useLondon = input.bool(true, "London Killzone", group=groupSessions)
+londonSession = input.session("0600-1015", "London Session (UTC)", group=groupSessions)
+londonKzColor = input.color(color.rgb(33, 92, 214), "London Color", group=groupSessions)
+
+useNyAm = input.bool(true, "New York AM Killzone", group=groupSessions)
+nyAmSession = input.session("1200-1630", "New York AM Session (UTC)", group=groupSessions)
+nyAmKzColor = input.color(color.rgb(20, 140, 110), "New York AM Color", group=groupSessions)
+
+useNyPm = input.bool(true, "New York PM Killzone", group=groupSessions)
+nyPmSession = input.session("1730-2030", "New York PM Session (UTC)", group=groupSessions)
+nyPmKzColor = input.color(color.rgb(214, 178, 33), "New York PM Color", group=groupSessions)
+
+groupM15 = "M15 / Structure Shift"
+m15Lookback = input.int(10, "M15 Structure Lookback", minval=3, maxval=50, group=groupM15)
+structureConfirmBars = input.int(2, "Bars To Confirm MSS After CHoCH", minval=1, maxval=10, group=groupM15)
+
+groupLiq = "Liquidity Targets"
+showLiquidityTargets = input.bool(true, "Show PDH/PDL, PWH/PWL, Session H/L", group=groupLiq)
+eqTolerancePct = input.float(10.0, "Equal High/Low Tolerance (% of H1 ATR)", minval=1.0, step=1.0, group=groupLiq)
+showEqLevels = input.bool(true, "Show EQH / EQL", group=groupLiq)
+
+groupPd = "Premium / Discount"
+showPdRange = input.bool(true, "Draw Dealing Range (Equilibrium Line)", group=groupPd)
+
+groupFvg = "Fair Value Gaps"
+showFvg   = input.bool(true, "Draw Nearest FVGs Only", group=groupFvg)
+fvgMaxAgeBars = input.int(400, "Max FVG Age (bars) Before Discarded", minval=20, group=groupFvg)
+fvgStoreLimit = input.int(60, "Max FVGs Tracked Per Side", minval=5, maxval=200, group=groupFvg)
+
+groupOb = "Order Blocks"
+showOb = input.bool(true, "Draw Nearest Order Blocks Only", group=groupOb)
+obMaxAgeBars = input.int(400, "Max OB Age (bars) Before Discarded", minval=20, group=groupOb)
+obStoreLimit = input.int(60, "Max OBs Tracked Per Side", minval=5, maxval=200, group=groupOb)
+
+groupAdr = "ADR"
+adrPeriod = input.int(14, "ADR Lookback (days)", minval=3, maxval=60, group=groupAdr)
+
+groupVisuals = "Visuals"
+showDashboard  = input.bool(true, "Show Dashboard", group=groupVisuals)
+showLabels     = input.bool(true, "Show Labels", group=groupVisuals)
+lineWidthInput = input.int(1, "Line Width", minval=1, maxval=4, group=groupVisuals)
+labelSizeInput = input.string(size.tiny, "Label Size", options=[size.tiny, size.small, size.normal], group=groupVisuals)
+showMitigatedLevels = input.bool(true, "Show Swept Levels (Faded, Instead Of Hidden)", group=groupVisuals)
+dashboardPosition = input.string(position.top_right, "Dashboard Position", options=[position.top_right, position.top_left, position.bottom_right, position.bottom_left], group=groupVisuals)
+dashboardTransparency = input.int(12, "Dashboard Body Transparency", minval=0, maxval=95, group=groupVisuals)
+
+groupColors = "Colors"
+bullColor = input.color(color.rgb(32, 184, 132), "Bullish Color", group=groupColors)
+bearColor = input.color(color.rgb(235, 82, 82), "Bearish Color", group=groupColors)
+sweepColor = input.color(color.rgb(245, 166, 35), "Sweep / PDH-PDL Color", group=groupColors)
+bosColor  = input.color(color.rgb(48, 128, 245), "MSS/CHoCH Line Color", group=groupColors)
+fvgBullColor = input.color(color.rgb(32, 184, 132), "Bullish FVG Color", group=groupColors)
+fvgBearColor = input.color(color.rgb(235, 82, 82), "Bearish FVG Color", group=groupColors)
+obBullColor  = input.color(color.rgb(20, 120, 220), "Bullish OB Color", group=groupColors)
+obBearColor  = input.color(color.rgb(220, 120, 20), "Bearish OB Color", group=groupColors)
+pwColor = input.color(color.rgb(230, 210, 60), "PWH / PWL Color", group=groupColors)
+asiaLvlColor = input.color(color.rgb(160, 90, 220), "Asia High/Low Color", group=groupColors)
+londonLvlColor = input.color(color.rgb(60, 200, 230), "London High/Low Color", group=groupColors)
+nyLvlColor = input.color(color.rgb(30, 160, 140), "New York High/Low Color", group=groupColors)
+eqColor = input.color(color.rgb(200, 200, 200), "EQH / EQL Color", group=groupColors)
+pdColor = input.color(color.rgb(150, 150, 220), "Equilibrium Line Color", group=groupColors)
+dashboardBg = input.color(color.rgb(15, 18, 30), "Dashboard Background", group=groupColors)
+dashboardText = input.color(color.rgb(225, 230, 240), "Dashboard Text", group=groupColors)
+
+//==========================================================================
+// CONSTANTS
+//==========================================================================
+
+int BIAS_NONE = 0
+int BIAS_BULLISH = 1
+int BIAS_BEARISH = -1
+
+float pip = syminfo.mintick * pipMultiplier
+
+//==========================================================================
+// TYPES (for FVG / Order Block tracking — "nearest only" model)
+//==========================================================================
+
+type Zone
+    float top
+    float bottom
+    bool  mitigated
+    int   barIndex
+
+//==========================================================================
+// OBJECT STORAGE
+//==========================================================================
+
+var array<Zone> bullFvgs = array.new<Zone>()
+var array<Zone> bearFvgs = array.new<Zone>()
+var array<Zone> bullObs  = array.new<Zone>()
+var array<Zone> bearObs  = array.new<Zone>()
+
+// Single reusable drawing objects ("nearest only" — IDs are reused, never re-created)
+var box   nearestBullFvgBox = na
+var box   nearestBearFvgBox = na
+var box   nearestBullObBox  = na
+var box   nearestBearObBox  = na
+var label nearestBullFvgLbl = na
+var label nearestBearFvgLbl = na
+var label nearestBullObLbl  = na
+var label nearestBearObLbl  = na
+
+//==========================================================================
+// HELPERS
+//==========================================================================
+
+bodyPercent(float o, float h, float l, float c) =>
+    float r = h - l
+    r > 0.0 ? math.abs(c - o) / r * 100.0 : 0.0
+
+isDisplacement(float o, float h, float l, float c, int direction) =>
+    bool dirOk = direction == BIAS_BULLISH ? c > o : direction == BIAS_BEARISH ? c < o : false
+    bodyPercent(o, h, l, c) >= displacementPct and dirOk
+
+biasText(int bias) =>
+    bias == BIAS_BULLISH ? "Bullish" : bias == BIAS_BEARISH ? "Bearish" : "Range"
+
+sweptText(bool mitigated) =>
+    mitigated ? "YES" : "NO"
+
+// Strict structure bias (no single-step fallback): BULLISH / BEARISH / NONE(range)
+structureBiasFunction() =>
+    float h1 = high[1]
+    float h2 = high[2]
+    float h3 = high[3]
+    float l1 = low[1]
+    float l2 = low[2]
+    float l3 = low[3]
+    int result = BIAS_NONE
+    if not na(h3) and not na(l3)
+        if h1 > h2 and h2 > h3 and l1 > l2 and l2 > l3
+            result := BIAS_BULLISH
+        else if h1 < h2 and h2 < h3 and l1 < l2 and l2 < l3
+            result := BIAS_BEARISH
+    result
+
+trimZones(array<Zone> arr, int limit) =>
+    while array.size(arr) > limit
+        array.shift(arr)
+
+//==========================================================================
+// MULTI-TIMEFRAME STRUCTURE DATA
+//==========================================================================
+
+weeklyBias = request.security(syminfo.tickerid, "W", structureBiasFunction(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+weeklyAtr  = request.security(syminfo.tickerid, "W", ta.atr(atrPeriod)[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+weeklyRange = request.security(syminfo.tickerid, "W", high[1] - low[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+weeklyClose = request.security(syminfo.tickerid, "W", close[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+weeklyMid3  = request.security(syminfo.tickerid, "W", (math.max(high[1], math.max(high[2], high[3])) + math.min(low[1], math.min(low[2], low[3]))) / 2.0, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+prevWeekHigh = request.security(syminfo.tickerid, "W", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+prevWeekLow  = request.security(syminfo.tickerid, "W", low[1],  gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+pdh = request.security(syminfo.tickerid, "D", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+pdl = request.security(syminfo.tickerid, "D", low[1],  gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+dailyTime = request.security(syminfo.tickerid, "D", time, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+dailyStructBias = request.security(syminfo.tickerid, "D", structureBiasFunction(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+dailyAtr  = request.security(syminfo.tickerid, "D", ta.atr(atrPeriod)[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+dailyRange = request.security(syminfo.tickerid, "D", high[1] - low[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+dailyDisplaced = request.security(syminfo.tickerid, "D", isDisplacement(open[1], high[1], low[1], close[1], close[1] > open[1] ? BIAS_BULLISH : BIAS_BEARISH), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+todayHigh = request.security(syminfo.tickerid, "D", high, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+todayLow  = request.security(syminfo.tickerid, "D", low,  gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+todayOpen = request.security(syminfo.tickerid, "D", open, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+bool newDay = ta.change(dailyTime) != 0
+
+// ADR (average daily range over adrPeriod days, in price then pips)
+dailyRangeSeries = request.security(syminfo.tickerid, "D", high[1] - low[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+var array<float> dailyRangeHistory = array.new<float>()
+if newDay
+    array.unshift(dailyRangeHistory, dailyRangeSeries)
+    if array.size(dailyRangeHistory) > adrPeriod
+        array.pop(dailyRangeHistory)
+adr = array.size(dailyRangeHistory) > 0 ? array.sum(dailyRangeHistory) / array.size(dailyRangeHistory) : na
+adrUsedToday = not na(adr) and adr > 0 ? (todayHigh - todayLow) / adr * 100.0 : na
+
+[h4Open, h4High, h4Low, h4Close, h4Time, h4Atr, h4Range, h4StructBias, h4Displaced] = request.security(
+     syminfo.tickerid, "240",
+     [open[1], high[1], low[1], close[1], time[1], ta.atr(atrPeriod)[1], high[1] - low[1], structureBiasFunction(),
+      isDisplacement(open[1], high[1], low[1], close[1], close[1] > open[1] ? BIAS_BULLISH : BIAS_BEARISH)],
+     gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+[h1Open, h1High, h1Low, h1Close, h1Time, h1Atr, h1SwingHigh, h1SwingLow, h1StructBias,
+ h1PreOpen, h1PreHigh, h1PreLow, h1PreClose] = request.security(
+     syminfo.tickerid, "60",
+     [open[1], high[1], low[1], close[1], time[1], ta.atr(atrPeriod)[1],
+      ta.highest(high, swingLookback)[2], ta.lowest(low, swingLookback)[2], structureBiasFunction(),
+      open[2], high[2], low[2], close[2]],
+     gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// M15: closed-bar structure bias + raw OHLC for CHoCH/MSS + FVG detection
+[m15Open, m15High, m15Low, m15Close, m15Time, m15StructBiasRaw, m15SwingHigh, m15SwingLow,
+ m15FvgBullTop, m15FvgBullBottom, m15FvgBearTop, m15FvgBearBottom] = request.security(
+     syminfo.tickerid, "15",
+     [open[1], high[1], low[1], close[1], time[1], structureBiasFunction(),
+      ta.highest(high, m15Lookback)[2], ta.lowest(low, m15Lookback)[2],
+      low[1] > high[3] ? low[1] : na, low[1] > high[3] ? high[3] : na,
+      high[1] < low[3] ? low[3] : na, high[1] < low[3] ? high[1] : na],
+     gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+bool newH1  = ta.change(h1Time)  != 0
+bool newM15 = ta.change(m15Time) != 0
+
+//==========================================================================
+// HTF BIAS ENGINE (ICT terminology, never blank)
+//==========================================================================
+
+// Weekly — Bullish / Bearish / Retracement / Accumulation / Distribution
+weeklyConsolidation = not na(weeklyAtr) and weeklyAtr > 0 and not na(weeklyRange) and weeklyRange < weeklyAtr * weeklyConsolidationMult
+weeklyStateText = weeklyBias == BIAS_BULLISH ? "Bullish" :
+                  weeklyBias == BIAS_BEARISH ? "Bearish" :
+                  weeklyConsolidation ? (not na(weeklyClose) and not na(weeklyMid3) and weeklyClose < weeklyMid3 ? "Accumulation" : "Distribution") :
+                  "Retracement"
+
+// Daily — Bullish / Bearish / Pullback / Expansion / Consolidation
+dailyConsolidation = not na(dailyAtr) and dailyAtr > 0 and not na(dailyRange) and dailyRange < dailyAtr * htfConsolidationMult
+dailyTrendText = dailyStructBias == BIAS_BULLISH ? "Bullish" :
+                 dailyStructBias == BIAS_BEARISH ? "Bearish" :
+                 dailyConsolidation ? "Consolidation" :
+                 (dailyDisplaced ? "Expansion" : "Pullback")
+
+// H4 — Bullish / Bearish / Pullback / Expansion / Consolidation
+h4Consolidation = not na(h4Atr) and h4Atr > 0 and not na(h4Range) and h4Range < h4Atr * htfConsolidationMult
+h4TrendText = h4StructBias == BIAS_BULLISH ? "Bullish" :
+              h4StructBias == BIAS_BEARISH ? "Bearish" :
+              h4Consolidation ? "Consolidation" :
+              (h4Displaced ? "Expansion" : "Pullback")
+
+htfAligned = (dailyStructBias == BIAS_BULLISH and h4StructBias == BIAS_BULLISH) or (dailyStructBias == BIAS_BEARISH and h4StructBias == BIAS_BEARISH)
+htfAlignedText = htfAligned ? "YES" : "NO"
+
+//==========================================================================
+// CURRENT MARKET STRUCTURE — H1 (Bullish/Bearish/Range) & M15 (+ CHoCH/MSS)
+//==========================================================================
+
+h1StructureText = biasText(h1StructBias)
+
+// M15 CHoCH / MSS tracking
+var int  m15PrevBias        = BIAS_NONE
+var int  m15ConsecutiveSame = 0
+var bool m15JustShifted     = false
+
+if newM15
+    if m15StructBiasRaw != BIAS_NONE and m15StructBiasRaw != m15PrevBias
+        m15JustShifted     := true
+        m15ConsecutiveSame := 1
+    else if m15StructBiasRaw != BIAS_NONE and m15StructBiasRaw == m15PrevBias
+        m15JustShifted     := false
+        m15ConsecutiveSame := m15ConsecutiveSame + 1
+    else
+        m15JustShifted := false
+    if m15StructBiasRaw != BIAS_NONE
+        m15PrevBias := m15StructBiasRaw
+
+m15IsChoch = m15JustShifted
+m15IsMss   = not m15JustShifted and m15ConsecutiveSame >= structureConfirmBars and m15PrevBias != BIAS_NONE
+
+m15StructureText = m15StructBiasRaw == BIAS_NONE and m15PrevBias == BIAS_NONE ? "Range" :
+     m15IsChoch ? ("CHoCH " + biasText(m15PrevBias)) :
+     m15IsMss   ? ("MSS " + biasText(m15PrevBias)) :
+     biasText(m15PrevBias)
+
+//==========================================================================
+// SESSIONS / KILLZONES
+//==========================================================================
+
+inAsia   = useAsia   and not na(time(timeframe.period, asiaSession,  "UTC"))
+inLondon = useLondon and not na(time(timeframe.period, londonSession, "UTC"))
+inNyAm   = useNyAm   and not na(time(timeframe.period, nyAmSession,   "UTC"))
+inNyPm   = useNyPm   and not na(time(timeframe.period, nyPmSession,   "UTC"))
+inKillzone = inAsia or inLondon or inNyAm or inNyPm
+inNewYorkCombined = inNyAm or inNyPm
+
+bgcolor(showKillzones and inAsia   ? color.new(asiaKzColor,   91) : na)
+bgcolor(showKillzones and inLondon ? color.new(londonKzColor, 91) : na)
+bgcolor(showKillzones and inNyAm   ? color.new(nyAmKzColor,   91) : na)
+bgcolor(showKillzones and inNyPm   ? color.new(nyPmKzColor,   91) : na)
+
+sessionText = inAsia ? "Asia" : inLondon ? "London" : inNyAm ? "New York AM" : inNyPm ? "New York PM" : "Off"
+killzoneText = inKillzone ? "YES" : "NO"
+
+//==========================================================================
+// LIQUIDITY TRACKER — PDH/PDL, PWH/PWL, session highs/lows, sweep flags
+//==========================================================================
+
+var line  pdhLine = na
+var line  pdlLine = na
+var label pdhLabel = na
+var label pdlLabel = na
+var bool  pdhSwept = false
+var bool  pdlSwept = false
+
+if newDay
+    pdhSwept := false
+    pdlSwept := false
+if not pdhSwept and not na(pdh) and high >= pdh
+    pdhSwept := true
+if not pdlSwept and not na(pdl) and low <= pdl
+    pdlSwept := true
+
+if showLiquidityTargets and barstate.islast and not na(pdh) and not na(pdl)
+    color pdhCol = pdhSwept and showMitigatedLevels ? color.new(color.gray, 60) : sweepColor
+    color pdlCol = pdlSwept and showMitigatedLevels ? color.new(color.gray, 60) : sweepColor
+    if na(pdhLine)
+        pdhLine := line.new(bar_index - 1, pdh, bar_index, pdh, extend=extend.right, color=pdhCol, style=line.style_dotted, width=lineWidthInput)
+        pdlLine := line.new(bar_index - 1, pdl, bar_index, pdl, extend=extend.right, color=pdlCol, style=line.style_dotted, width=lineWidthInput)
+        if showLabels
+            pdhLabel := label.new(bar_index, pdh, "PDH", style=label.style_label_left, textcolor=color.white, color=color.new(pdhCol, 10), size=labelSizeInput)
+            pdlLabel := label.new(bar_index, pdl, "PDL", style=label.style_label_left, textcolor=color.white, color=color.new(pdlCol, 10), size=labelSizeInput)
+    line.set_xy1(pdhLine, bar_index - 1, pdh)
+    line.set_xy2(pdhLine, bar_index, pdh)
+    line.set_color(pdhLine, pdhCol)
+    line.set_xy1(pdlLine, bar_index - 1, pdl)
+    line.set_xy2(pdlLine, bar_index, pdl)
+    line.set_color(pdlLine, pdlCol)
+    if showLabels and not na(pdhLabel)
+        label.set_xy(pdhLabel, bar_index, pdh)
+        label.set_color(pdhLabel, color.new(pdhCol, 10))
+        label.set_xy(pdlLabel, bar_index, pdl)
+        label.set_color(pdlLabel, color.new(pdlCol, 10))
+
+var line  pwhLine = na
+var line  pwlLine = na
+var label pwhLabel = na
+var label pwlLabel = na
+var bool  pwhSwept = false
+var bool  pwlSwept = false
+
+bool newWeek = ta.change(weekofyear(time)) != 0
+if newWeek
+    pwhSwept := false
+    pwlSwept := false
+if not pwhSwept and not na(prevWeekHigh) and high >= prevWeekHigh
+    pwhSwept := true
+if not pwlSwept and not na(prevWeekLow) and low <= prevWeekLow
+    pwlSwept := true
+
+if showLiquidityTargets and barstate.islast and not na(prevWeekHigh) and not na(prevWeekLow)
+    color pwhCol = pwhSwept and showMitigatedLevels ? color.new(color.gray, 60) : pwColor
+    color pwlCol = pwlSwept and showMitigatedLevels ? color.new(color.gray, 60) : pwColor
+    if na(pwhLine)
+        pwhLine := line.new(bar_index - 1, prevWeekHigh, bar_index, prevWeekHigh, extend=extend.right, color=pwhCol, style=line.style_dashed, width=lineWidthInput)
+        pwlLine := line.new(bar_index - 1, prevWeekLow, bar_index, prevWeekLow, extend=extend.right, color=pwlCol, style=line.style_dashed, width=lineWidthInput)
+        if showLabels
+            pwhLabel := label.new(bar_index, prevWeekHigh, "PWH", style=label.style_label_left, textcolor=color.white, color=color.new(pwhCol, 10), size=labelSizeInput)
+            pwlLabel := label.new(bar_index, prevWeekLow, "PWL", style=label.style_label_left, textcolor=color.white, color=color.new(pwlCol, 10), size=labelSizeInput)
+    line.set_xy1(pwhLine, bar_index - 1, prevWeekHigh)
+    line.set_xy2(pwhLine, bar_index, prevWeekHigh)
+    line.set_color(pwhLine, pwhCol)
+    line.set_xy1(pwlLine, bar_index - 1, prevWeekLow)
+    line.set_xy2(pwlLine, bar_index, prevWeekLow)
+    line.set_color(pwlLine, pwlCol)
+    if showLabels and not na(pwhLabel)
+        label.set_xy(pwhLabel, bar_index, prevWeekHigh)
+        label.set_color(pwhLabel, color.new(pwhCol, 10))
+        label.set_xy(pwlLabel, bar_index, prevWeekLow)
+        label.set_color(pwlLabel, color.new(pwlCol, 10))
+
+// Session ranges: Asia / London / New York (combined AM+PM)
+var float asiaHighVal = na
+var float asiaLowVal  = na
+var float londonHighVal = na
+var float londonLowVal  = na
+var float nyHighVal = na
+var float nyLowVal  = na
+
+bool asiaStart   = inAsia   and not inAsia[1]
+bool londonStart = inLondon and not inLondon[1]
+bool nyStart     = inNewYorkCombined and not inNewYorkCombined[1]
+
+if asiaStart
+    asiaHighVal := high
+    asiaLowVal  := low
+else if inAsia
+    asiaHighVal := math.max(asiaHighVal, high)
+    asiaLowVal  := math.min(asiaLowVal, low)
+
+if londonStart
+    londonHighVal := high
+    londonLowVal  := low
+else if inLondon
+    londonHighVal := math.max(londonHighVal, high)
+    londonLowVal  := math.min(londonLowVal, low)
+
+if nyStart
+    nyHighVal := high
+    nyLowVal  := low
+else if inNewYorkCombined
+    nyHighVal := math.max(nyHighVal, high)
+    nyLowVal  := math.min(nyLowVal, low)
+
+var line  asiaHighLine = na
+var line  asiaLowLine  = na
+var line  londonHighLine = na
+var line  londonLowLine  = na
+var line  nyHighLine = na
+var line  nyLowLine  = na
+var label asiaHighLbl = na
+var label asiaLowLbl  = na
+var label londonHighLbl = na
+var label londonLowLbl  = na
+var label nyHighLbl = na
+var label nyLowLbl  = na
+
+var bool asiaHighSwept = false
+var bool asiaLowSwept  = false
+var bool londonHighSwept = false
+var bool londonLowSwept  = false
+var bool nyHighSwept = false
+var bool nyLowSwept  = false
+
+if asiaStart
+    asiaHighSwept := false
+    asiaLowSwept  := false
+if londonStart
+    londonHighSwept := false
+    londonLowSwept  := false
+if nyStart
+    nyHighSwept := false
+    nyLowSwept  := false
+
+if not asiaHighSwept and not na(asiaHighVal) and high >= asiaHighVal
+    asiaHighSwept := true
+if not asiaLowSwept and not na(asiaLowVal) and low <= asiaLowVal
+    asiaLowSwept := true
+if not londonHighSwept and not na(londonHighVal) and high >= londonHighVal
+    londonHighSwept := true
+if not londonLowSwept and not na(londonLowVal) and low <= londonLowVal
+    londonLowSwept := true
+if not nyHighSwept and not na(nyHighVal) and high >= nyHighVal
+    nyHighSwept := true
+if not nyLowSwept and not na(nyLowVal) and low <= nyLowVal
+    nyLowSwept := true
+
+if showLiquidityTargets and barstate.islast
+    color aHc = asiaHighSwept and showMitigatedLevels ? color.new(color.gray, 60) : asiaLvlColor
+    color aLc = asiaLowSwept  and showMitigatedLevels ? color.new(color.gray, 60) : asiaLvlColor
+    color lHc = londonHighSwept and showMitigatedLevels ? color.new(color.gray, 60) : londonLvlColor
+    color lLc = londonLowSwept  and showMitigatedLevels ? color.new(color.gray, 60) : londonLvlColor
+    color nHc = nyHighSwept and showMitigatedLevels ? color.new(color.gray, 60) : nyLvlColor
+    color nLc = nyLowSwept  and showMitigatedLevels ? color.new(color.gray, 60) : nyLvlColor
+
+    if not na(asiaHighVal)
+        if na(asiaHighLine)
+            asiaHighLine := line.new(bar_index - 1, asiaHighVal, bar_index, asiaHighVal, extend=extend.right, color=aHc, style=line.style_dashed, width=lineWidthInput)
+            asiaLowLine  := line.new(bar_index - 1, asiaLowVal, bar_index, asiaLowVal, extend=extend.right, color=aLc, style=line.style_dashed, width=lineWidthInput)
+            if showLabels
+                asiaHighLbl := label.new(bar_index, asiaHighVal, "Asian High", style=label.style_label_left, textcolor=color.white, color=color.new(aHc, 10), size=labelSizeInput)
+                asiaLowLbl  := label.new(bar_index, asiaLowVal, "Asian Low", style=label.style_label_left, textcolor=color.white, color=color.new(aLc, 10), size=labelSizeInput)
+        line.set_xy1(asiaHighLine, bar_index - 1, asiaHighVal)
+        line.set_xy2(asiaHighLine, bar_index, asiaHighVal)
+        line.set_color(asiaHighLine, aHc)
+        line.set_xy1(asiaLowLine, bar_index - 1, asiaLowVal)
+        line.set_xy2(asiaLowLine, bar_index, asiaLowVal)
+        line.set_color(asiaLowLine, aLc)
+        if showLabels and not na(asiaHighLbl)
+            label.set_xy(asiaHighLbl, bar_index, asiaHighVal)
+            label.set_color(asiaHighLbl, color.new(aHc, 10))
+            label.set_xy(asiaLowLbl, bar_index, asiaLowVal)
+            label.set_color(asiaLowLbl, color.new(aLc, 10))
+
+    if not na(londonHighVal)
+        if na(londonHighLine)
+            londonHighLine := line.new(bar_index - 1, londonHighVal, bar_index, londonHighVal, extend=extend.right, color=lHc, style=line.style_dashed, width=lineWidthInput)
+            londonLowLine  := line.new(bar_index - 1, londonLowVal, bar_index, londonLowVal, extend=extend.right, color=lLc, style=line.style_dashed, width=lineWidthInput)
+            if showLabels
+                londonHighLbl := label.new(bar_index, londonHighVal, "London High", style=label.style_label_left, textcolor=color.white, color=color.new(lHc, 10), size=labelSizeInput)
+                londonLowLbl  := label.new(bar_index, londonLowVal, "London Low", style=label.style_label_left, textcolor=color.white, color=color.new(lLc, 10), size=labelSizeInput)
+        line.set_xy1(londonHighLine, bar_index - 1, londonHighVal)
+        line.set_xy2(londonHighLine, bar_index, londonHighVal)
+        line.set_color(londonHighLine, lHc)
+        line.set_xy1(londonLowLine, bar_index - 1, londonLowVal)
+        line.set_xy2(londonLowLine, bar_index, londonLowVal)
+        line.set_color(londonLowLine, lLc)
+        if showLabels and not na(londonHighLbl)
+            label.set_xy(londonHighLbl, bar_index, londonHighVal)
+            label.set_color(londonHighLbl, color.new(lHc, 10))
+            label.set_xy(londonLowLbl, bar_index, londonLowVal)
+            label.set_color(londonLowLbl, color.new(lLc, 10))
+
+    if not na(nyHighVal)
+        if na(nyHighLine)
+            nyHighLine := line.new(bar_index - 1, nyHighVal, bar_index, nyHighVal, extend=extend.right, color=nHc, style=line.style_dashed, width=lineWidthInput)
+            nyLowLine  := line.new(bar_index - 1, nyLowVal, bar_index, nyLowVal, extend=extend.right, color=nLc, style=line.style_dashed, width=lineWidthInput)
+            if showLabels
+                nyHighLbl := label.new(bar_index, nyHighVal, "New York High", style=label.style_label_left, textcolor=color.white, color=color.new(nHc, 10), size=labelSizeInput)
+                nyLowLbl  := label.new(bar_index, nyLowVal, "New York Low", style=label.style_label_left, textcolor=color.white, color=color.new(nLc, 10), size=labelSizeInput)
+        line.set_xy1(nyHighLine, bar_index - 1, nyHighVal)
+        line.set_xy2(nyHighLine, bar_index, nyHighVal)
+        line.set_color(nyHighLine, nHc)
+        line.set_xy1(nyLowLine, bar_index - 1, nyLowVal)
+        line.set_xy2(nyLowLine, bar_index, nyLowVal)
+        line.set_color(nyLowLine, nLc)
+        if showLabels and not na(nyHighLbl)
+            label.set_xy(nyHighLbl, bar_index, nyHighVal)
+            label.set_color(nyHighLbl, color.new(nHc, 10))
+            label.set_xy(nyLowLbl, bar_index, nyLowVal)
+            label.set_color(nyLowLbl, color.new(nLc, 10))
+
+//==========================================================================
+// EQUAL HIGHS / EQUAL LOWS
+//==========================================================================
+
+float ph = ta.pivothigh(3, 3)
+float pl = ta.pivotlow(3, 3)
+var float lastPivotHigh = na
+var float lastPivotLow  = na
+eqTolerance = h1Atr * eqTolerancePct / 100.0
+
+if showEqLevels and not na(ph)
+    if not na(lastPivotHigh) and not na(eqTolerance) and math.abs(ph - lastPivotHigh) <= eqTolerance
+        float eqLevel = math.max(ph, lastPivotHigh)
+        line eqL = line.new(bar_index - 6, eqLevel, bar_index + 20, eqLevel, extend=extend.right, color=eqColor, style=line.style_dotted, width=lineWidthInput)
+        if showLabels
+            label.new(bar_index, eqLevel, "EQH", style=label.style_label_down, textcolor=color.white, color=color.new(eqColor, 10), size=labelSizeInput)
+    lastPivotHigh := ph
+
+if showEqLevels and not na(pl)
+    if not na(lastPivotLow) and not na(eqTolerance) and math.abs(pl - lastPivotLow) <= eqTolerance
+        float eqLevel = math.min(pl, lastPivotLow)
+        line eqL = line.new(bar_index - 6, eqLevel, bar_index + 20, eqLevel, extend=extend.right, color=eqColor, style=line.style_dotted, width=lineWidthInput)
+        if showLabels
+            label.new(bar_index, eqLevel, "EQL", style=label.style_label_up, textcolor=color.white, color=color.new(eqColor, 10), size=labelSizeInput)
+    lastPivotLow := pl
+
+//==========================================================================
+// PREMIUM / DISCOUNT ENGINE (dealing range = current H1 swing range)
+//==========================================================================
+
+equilibrium = (not na(h1SwingHigh) and not na(h1SwingLow)) ? (h1SwingHigh + h1SwingLow) / 2.0 : na
+dealingRange = (not na(h1SwingHigh) and not na(h1SwingLow)) ? (h1SwingHigh - h1SwingLow) : na
+inDiscount = not na(equilibrium) and close <= equilibrium
+inPremium  = not na(equilibrium) and close > equilibrium
+distToEqPct = (not na(equilibrium) and not na(dealingRange) and dealingRange > 0) ? math.abs(close - equilibrium) / dealingRange * 100.0 : na
+premiumDiscountText = na(equilibrium) ? "N/A" : (inPremium ? "Premium" : "Discount") + (na(distToEqPct) ? "" : "  " + str.tostring(distToEqPct, "#.0") + "%")
+
+var line eqmLine = na
+if showPdRange and barstate.islast and not na(equilibrium)
+    if na(eqmLine)
+        eqmLine := line.new(bar_index - 20, equilibrium, bar_index, equilibrium, color=pdColor, style=line.style_dashed, width=lineWidthInput)
+    line.set_xy1(eqmLine, bar_index - 20, equilibrium)
+    line.set_xy2(eqmLine, bar_index, equilibrium)
+
+//==========================================================================
+// FVG ENGINE — detect on M15, keep a rolling list, display nearest only
+//==========================================================================
+
+if newM15
+    if not na(m15FvgBullTop) and not na(m15FvgBullBottom)
+        array.push(bullFvgs, Zone.new(m15FvgBullTop, m15FvgBullBottom, false, bar_index))
+        trimZones(bullFvgs, fvgStoreLimit)
+    if not na(m15FvgBearTop) and not na(m15FvgBearBottom)
+        array.push(bearFvgs, Zone.new(m15FvgBearTop, m15FvgBearBottom, false, bar_index))
+        trimZones(bearFvgs, fvgStoreLimit)
+
+// mitigate + discard-aged, every bar
+if array.size(bullFvgs) > 0
+    for i = array.size(bullFvgs) - 1 to 0
+        Zone z = array.get(bullFvgs, i)
+        if not z.mitigated and low <= z.top
+            z.mitigated := true
+        if (bar_index - z.barIndex) > fvgMaxAgeBars or z.mitigated
+            array.remove(bullFvgs, i)
+
+if array.size(bearFvgs) > 0
+    for i = array.size(bearFvgs) - 1 to 0
+        Zone z = array.get(bearFvgs, i)
+        if not z.mitigated and high >= z.bottom
+            z.mitigated := true
+        if (bar_index - z.barIndex) > fvgMaxAgeBars or z.mitigated
+            array.remove(bearFvgs, i)
+
+// nearest unmitigated bullish FVG = highest top that is still below/at price (support below)
+float nearestBullFvgTop = na
+float nearestBullFvgBottom = na
+if array.size(bullFvgs) > 0
+    for i = 0 to array.size(bullFvgs) - 1
+        Zone z = array.get(bullFvgs, i)
+        if na(nearestBullFvgTop) or math.abs(close - z.top) < math.abs(close - nearestBullFvgTop)
+            nearestBullFvgTop := z.top
+            nearestBullFvgBottom := z.bottom
+
+float nearestBearFvgTop = na
+float nearestBearFvgBottom = na
+if array.size(bearFvgs) > 0
+    for i = 0 to array.size(bearFvgs) - 1
+        Zone z = array.get(bearFvgs, i)
+        if na(nearestBearFvgTop) or math.abs(close - z.bottom) < math.abs(close - nearestBearFvgTop)
+            nearestBearFvgTop := z.top
+            nearestBearFvgBottom := z.bottom
+
+if showFvg and barstate.islast
+    if not na(nearestBullFvgTop)
+        if na(nearestBullFvgBox)
+            nearestBullFvgBox := box.new(bar_index - 3, nearestBullFvgTop, bar_index + 10, nearestBullFvgBottom, bgcolor=color.new(fvgBullColor, 84), border_color=color.new(fvgBullColor, 20))
+            if showLabels
+                nearestBullFvgLbl := label.new(bar_index + 10, (nearestBullFvgTop + nearestBullFvgBottom) / 2.0, "Nearest Bull FVG", style=label.style_label_left, textcolor=color.white, color=color.new(fvgBullColor, 10), size=labelSizeInput)
+        box.set_lefttop(nearestBullFvgBox, bar_index - 3, nearestBullFvgTop)
+        box.set_rightbottom(nearestBullFvgBox, bar_index + 10, nearestBullFvgBottom)
+        if showLabels and not na(nearestBullFvgLbl)
+            label.set_xy(nearestBullFvgLbl, bar_index + 10, (nearestBullFvgTop + nearestBullFvgBottom) / 2.0)
+    else if not na(nearestBullFvgBox)
+        box.delete(nearestBullFvgBox)
+        nearestBullFvgBox := na
+        if not na(nearestBullFvgLbl)
+            label.delete(nearestBullFvgLbl)
+            nearestBullFvgLbl := na
+
+    if not na(nearestBearFvgTop)
+        if na(nearestBearFvgBox)
+            nearestBearFvgBox := box.new(bar_index - 3, nearestBearFvgTop, bar_index + 10, nearestBearFvgBottom, bgcolor=color.new(fvgBearColor, 84), border_color=color.new(fvgBearColor, 20))
+            if showLabels
+                nearestBearFvgLbl := label.new(bar_index + 10, (nearestBearFvgTop + nearestBearFvgBottom) / 2.0, "Nearest Bear FVG", style=label.style_label_left, textcolor=color.white, color=color.new(fvgBearColor, 10), size=labelSizeInput)
+        box.set_lefttop(nearestBearFvgBox, bar_index - 3, nearestBearFvgTop)
+        box.set_rightbottom(nearestBearFvgBox, bar_index + 10, nearestBearFvgBottom)
+        if showLabels and not na(nearestBearFvgLbl)
+            label.set_xy(nearestBearFvgLbl, bar_index + 10, (nearestBearFvgTop + nearestBearFvgBottom) / 2.0)
+    else if not na(nearestBearFvgBox)
+        box.delete(nearestBearFvgBox)
+        nearestBearFvgBox := na
+        if not na(nearestBearFvgLbl)
+            label.delete(nearestBearFvgLbl)
+            nearestBearFvgLbl := na
+
+fvgBullDistPips = not na(nearestBullFvgTop) ? math.abs(close - nearestBullFvgTop) / pip : na
+fvgBearDistPips = not na(nearestBearFvgTop) ? math.abs(close - nearestBearFvgTop) / pip : na
+
+//==========================================================================
+// ORDER BLOCK ENGINE — last opposite-colour H1 candle before displacement
+//==========================================================================
+
+h1BullDisplacement = isDisplacement(h1Open, h1High, h1Low, h1Close, BIAS_BULLISH)
+h1BearDisplacement = isDisplacement(h1Open, h1High, h1Low, h1Close, BIAS_BEARISH)
+
+bullObCandidate = h1BullDisplacement and not na(h1PreClose) and h1PreClose < h1PreOpen
+bearObCandidate = h1BearDisplacement and not na(h1PreClose) and h1PreClose > h1PreOpen
+
+if newH1 and bullObCandidate
+    array.push(bullObs, Zone.new(h1PreHigh, h1PreLow, false, bar_index))
+    trimZones(bullObs, obStoreLimit)
+if newH1 and bearObCandidate
+    array.push(bearObs, Zone.new(h1PreHigh, h1PreLow, false, bar_index))
+    trimZones(bearObs, obStoreLimit)
+
+if array.size(bullObs) > 0
+    for i = array.size(bullObs) - 1 to 0
+        Zone z = array.get(bullObs, i)
+        if not z.mitigated and low <= z.top
+            z.mitigated := true
+        if (bar_index - z.barIndex) > obMaxAgeBars or z.mitigated
+            array.remove(bullObs, i)
+
+if array.size(bearObs) > 0
+    for i = array.size(bearObs) - 1 to 0
+        Zone z = array.get(bearObs, i)
+        if not z.mitigated and high >= z.bottom
+            z.mitigated := true
+        if (bar_index - z.barIndex) > obMaxAgeBars or z.mitigated
+            array.remove(bearObs, i)
+
+float nearestBullObTop = na
+float nearestBullObBottom = na
+if array.size(bullObs) > 0
+    for i = 0 to array.size(bullObs) - 1
+        Zone z = array.get(bullObs, i)
+        if na(nearestBullObTop) or math.abs(close - z.top) < math.abs(close - nearestBullObTop)
+            nearestBullObTop := z.top
+            nearestBullObBottom := z.bottom
+
+float nearestBearObTop = na
+float nearestBearObBottom = na
+if array.size(bearObs) > 0
+    for i = 0 to array.size(bearObs) - 1
+        Zone z = array.get(bearObs, i)
+        if na(nearestBearObTop) or math.abs(close - z.bottom) < math.abs(close - nearestBearObTop)
+            nearestBearObTop := z.top
+            nearestBearObBottom := z.bottom
+
+if showOb and barstate.islast
+    if not na(nearestBullObTop)
+        if na(nearestBullObBox)
+            nearestBullObBox := box.new(bar_index - 3, nearestBullObTop, bar_index + 10, nearestBullObBottom, bgcolor=color.new(obBullColor, 86), border_color=color.new(obBullColor, 20))
+            if showLabels
+                nearestBullObLbl := label.new(bar_index + 10, (nearestBullObTop + nearestBullObBottom) / 2.0, "Nearest Bull OB", style=label.style_label_left, textcolor=color.white, color=color.new(obBullColor, 10), size=labelSizeInput)
+        box.set_lefttop(nearestBullObBox, bar_index - 3, nearestBullObTop)
+        box.set_rightbottom(nearestBullObBox, bar_index + 10, nearestBullObBottom)
+        if showLabels and not na(nearestBullObLbl)
+            label.set_xy(nearestBullObLbl, bar_index + 10, (nearestBullObTop + nearestBullObBottom) / 2.0)
+    else if not na(nearestBullObBox)
+        box.delete(nearestBullObBox)
+        nearestBullObBox := na
+        if not na(nearestBullObLbl)
+            label.delete(nearestBullObLbl)
+            nearestBullObLbl := na
+
+    if not na(nearestBearObTop)
+        if na(nearestBearObBox)
+            nearestBearObBox := box.new(bar_index - 3, nearestBearObTop, bar_index + 10, nearestBearObBottom, bgcolor=color.new(obBearColor, 86), border_color=color.new(obBearColor, 20))
+            if showLabels
+                nearestBearObLbl := label.new(bar_index + 10, (nearestBearObTop + nearestBearObBottom) / 2.0, "Nearest Bear OB", style=label.style_label_left, textcolor=color.white, color=color.new(obBearColor, 10), size=labelSizeInput)
+        box.set_lefttop(nearestBearObBox, bar_index - 3, nearestBearObTop)
+        box.set_rightbottom(nearestBearObBox, bar_index + 10, nearestBearObBottom)
+        if showLabels and not na(nearestBearObLbl)
+            label.set_xy(nearestBearObLbl, bar_index + 10, (nearestBearObTop + nearestBearObBottom) / 2.0)
+    else if not na(nearestBearObBox)
+        box.delete(nearestBearObBox)
+        nearestBearObBox := na
+        if not na(nearestBearObLbl)
+            label.delete(nearestBearObLbl)
+            nearestBearObLbl := na
+
+//==========================================================================
+// CURRENT DAY HIGH / LOW (lightweight, chart cleanup)
+//==========================================================================
+
+var line curDayHighLine = na
+var line curDayLowLine  = na
+if showLiquidityTargets and barstate.islast and not na(todayHigh) and not na(todayLow)
+    if na(curDayHighLine)
+        curDayHighLine := line.new(bar_index - 5, todayHigh, bar_index, todayHigh, extend=extend.right, color=color.new(color.white, 40), style=line.style_solid, width=lineWidthInput)
+        curDayLowLine  := line.new(bar_index - 5, todayLow,  bar_index, todayLow,  extend=extend.right, color=color.new(color.white, 40), style=line.style_solid, width=lineWidthInput)
+    line.set_xy1(curDayHighLine, bar_index - 5, todayHigh)
+    line.set_xy2(curDayHighLine, bar_index, todayHigh)
+    line.set_xy1(curDayLowLine, bar_index - 5, todayLow)
+    line.set_xy2(curDayLowLine, bar_index, todayLow)
+
+//==========================================================================
+// LIQUIDITY SWEEP DETECTION (reporting only — feeds alerts + checklist)
+//==========================================================================
+
+atrPips = h1Atr / pip
+minSweepDistance = math.max(minWickPips * pip, h1Atr * minAtrFraction)
+
+highSweep = newH1 and h1High > pdh and h1Close < pdh and (h1High - pdh) >= minSweepDistance
+lowSweep  = newH1 and h1Low  < pdl and h1Close > pdl and (pdl  - h1Low)  >= minSweepDistance
+
+//==========================================================================
+// REUSABLE EA-COMPATIBILITY FUNCTIONS
+// Thin wrappers over already-computed state, kept zero-argument so the same
+// logic names can be mirrored later inside an MT5 Expert Advisor.
+//==========================================================================
+
+isBullishSweep() => lowSweep
+isBearishSweep() => highSweep
+isBullishMSS() => m15IsMss and m15PrevBias == BIAS_BULLISH
+isBearishMSS() => m15IsMss and m15PrevBias == BIAS_BEARISH
+isBullishChoch() => m15IsChoch and m15PrevBias == BIAS_BULLISH
+isBearishChoch() => m15IsChoch and m15PrevBias == BIAS_BEARISH
+isBullishFVG() => not na(nearestBullFvgTop)
+isBearishFVG() => not na(nearestBearFvgTop)
+isPremium() => inPremium
+isDiscount() => inDiscount
+isLondonSession() => inLondon
+isAsiaSession() => inAsia
+isNewYorkSession() => inNewYorkCombined
+
+//==========================================================================
+// SETUP PROGRESS CHECKLIST (discretionary model tracker — no signal fired)
+//==========================================================================
+
+checklistWeekly   = weeklyBias != BIAS_NONE
+checklistDaily    = dailyStructBias != BIAS_NONE
+checklistH4       = h4StructBias != BIAS_NONE
+checklistSession  = inKillzone
+checklistAsiaBuilt = not na(asiaHighVal) and not na(asiaLowVal)
+checklistLiquiditySwept = asiaHighSwept or asiaLowSwept or nyHighSwept or nyLowSwept or pdhSwept or pdlSwept
+checklistM15Shift = m15IsChoch or m15IsMss
+checklistFvgFormed = isBullishFVG() or isBearishFVG()
+checklistEntryZoneReady = checklistM15Shift and checklistFvgFormed and inKillzone
+
+chk(bool cond) => cond ? "\u2705" : "\u274C"
+
+//==========================================================================
+// ALERTS
+//==========================================================================
+
+alertcondition(pdhSwept and not pdhSwept[1], "Previous Day High Swept", "PDH SWEPT | {{ticker}}")
+alertcondition(pdlSwept and not pdlSwept[1], "Previous Day Low Swept",  "PDL SWEPT | {{ticker}}")
+alertcondition(pwhSwept and not pwhSwept[1], "Previous Week High Swept", "PWH SWEPT | {{ticker}}")
+alertcondition(pwlSwept and not pwlSwept[1], "Previous Week Low Swept",  "PWL SWEPT | {{ticker}}")
+alertcondition(asiaHighSwept and not asiaHighSwept[1], "Asian High Swept", "ASIAN HIGH SWEPT | {{ticker}}")
+alertcondition(asiaLowSwept  and not asiaLowSwept[1],  "Asian Low Swept",  "ASIAN LOW SWEPT | {{ticker}}")
+alertcondition(londonHighSwept and not londonHighSwept[1], "London High Swept", "LONDON HIGH SWEPT | {{ticker}}")
+alertcondition(londonLowSwept  and not londonLowSwept[1],  "London Low Swept",  "LONDON LOW SWEPT | {{ticker}}")
+alertcondition(nyHighSwept and not nyHighSwept[1], "New York High Swept", "NEW YORK HIGH SWEPT | {{ticker}}")
+alertcondition(nyLowSwept  and not nyLowSwept[1],  "New York Low Swept",  "NEW YORK LOW SWEPT | {{ticker}}")
+
+alertcondition(isBullishMSS(), "Bullish MSS", "BULLISH MSS | {{ticker}}")
+alertcondition(isBearishMSS(), "Bearish MSS", "BEARISH MSS | {{ticker}}")
+alertcondition(isBullishChoch(), "Bullish CHoCH", "BULLISH CHoCH | {{ticker}}")
+alertcondition(isBearishChoch(), "Bearish CHoCH", "BEARISH CHoCH | {{ticker}}")
+
+alertcondition(newM15 and not na(m15FvgBullTop), "Bullish FVG Created", "BULLISH FVG CREATED | {{ticker}}")
+alertcondition(newM15 and not na(m15FvgBearTop), "Bearish FVG Created", "BEARISH FVG CREATED | {{ticker}}")
+alertcondition(newH1 and bullObCandidate, "Bullish Order Block Created", "BULLISH ORDER BLOCK CREATED | {{ticker}}")
+alertcondition(newH1 and bearObCandidate, "Bearish Order Block Created", "BEARISH ORDER BLOCK CREATED | {{ticker}}")
+
+alertcondition(inPremium and not inPremium[1], "Entered Premium", "ENTERED PREMIUM | {{ticker}}")
+alertcondition(inDiscount and not inDiscount[1], "Entered Discount", "ENTERED DISCOUNT | {{ticker}}")
+alertcondition(inLondon and not inLondon[1], "Entered London Killzone", "ENTERED LONDON KILLZONE | {{ticker}}")
+alertcondition(inNewYorkCombined and not inNewYorkCombined[1], "Entered New York Killzone", "ENTERED NEW YORK KILLZONE | {{ticker}}")
+alertcondition(inAsia and not inAsia[1], "Entered Asia Killzone", "ENTERED ASIA KILLZONE | {{ticker}}")
+
+//==========================================================================
+// NEXT LIQUIDITY TARGET (nearest untouched pool above / below price)
+//==========================================================================
+
+aboveCandidates = array.new<float>()
+belowCandidates = array.new<float>()
+aboveLabels = array.new<string>()
+belowLabels = array.new<string>()
+
+addLevel(float lvl, bool swept, string label_, array<float> aboveArr, array<string> aboveLbl, array<float> belowArr, array<string> belowLbl) =>
+    if not na(lvl) and not swept
+        if lvl > close
+            array.push(aboveArr, lvl)
+            array.push(aboveLbl, label_)
+        else
+            array.push(belowArr, lvl)
+            array.push(belowLbl, label_)
+
+addLevel(pdh, pdhSwept, "PDH", aboveCandidates, aboveLabels, belowCandidates, belowLabels)
+addLevel(pdl, pdlSwept, "PDL", aboveCandidates, aboveLabels, belowCandidates, belowLabels)
+addLevel(prevWeekHigh, pwhSwept, "PWH", aboveCandidates, aboveLabels, belowCandidates, belowLabels)
+addLevel(prevWeekLow, pwlSwept, "PWL", aboveCandidates, aboveLabels, belowCandidates, belowLabels)
+addLevel(asiaHighVal, asiaHighSwept, "Asian High", aboveCandidates, aboveLabels, belowCandidates, belowLabels)
+addLevel(asiaLowVal, asiaLowSwept, "Asian Low", aboveCandidates, aboveLabels, belowCandidates, belowLabels)
+addLevel(londonHighVal, londonHighSwept, "London High", aboveCandidates, aboveLabels, belowCandidates, belowLabels)
+addLevel(londonLowVal, londonLowSwept, "London Low", aboveCandidates, aboveLabels, belowCandidates, belowLabels)
+addLevel(nyHighVal, nyHighSwept, "New York High", aboveCandidates, aboveLabels, belowCandidates, belowLabels)
+addLevel(nyLowVal, nyLowSwept, "New York Low", aboveCandidates, aboveLabels, belowCandidates, belowLabels)
+
+nearestAboveText = "---"
+nearestBelowText = "---"
+if array.size(aboveCandidates) > 0 // guarded
+    float best = na
+    string bestLbl = ""
+    for i = 0 to array.size(aboveCandidates) - 1
+        float v = array.get(aboveCandidates, i)
+        if na(best) or v < best
+            best := v
+            bestLbl := array.get(aboveLabels, i)
+    nearestAboveText := bestLbl
+if array.size(belowCandidates) > 0
+    float best = na
+    string bestLbl = ""
+    for i = 0 to array.size(belowCandidates) - 1
+        float v = array.get(belowCandidates, i)
+        if na(best) or v > best
+            best := v
+            bestLbl := array.get(belowLabels, i)
+    nearestBelowText := bestLbl
+
+//==========================================================================
+// DASHBOARD — compact redesign (12 rows, ~45% smaller than the original 21-row layout)
+//==========================================================================
+
+var table dashboard = table.new(dashboardPosition, 2, 12, border_width=1, frame_width=1, border_color=color.new(color.white, 82), frame_color=color.new(color.white, 82))
+
+dashboardCell(int col, int row, string textValue, color bgColor, color textColor) =>
+    table.cell(dashboard, col, row, textValue, bgcolor=bgColor, text_color=textColor, text_size=size.small)
+
+if showDashboard and barstate.islast
+    color header  = color.new(dashboardBg, 0)
+    color body    = color.new(dashboardBg, dashboardTransparency)
+    color neutral = color.new(color.gray, 80)
+    color bullBg  = color.new(bullColor, 70)
+    color bearBg  = color.new(bearColor, 70)
+
+    color weeklyBg = weeklyBias == BIAS_BULLISH ? bullBg : weeklyBias == BIAS_BEARISH ? bearBg : neutral
+    color dailyBg  = dailyStructBias == BIAS_BULLISH ? bullBg : dailyStructBias == BIAS_BEARISH ? bearBg : neutral
+    color h4Bg     = h4StructBias == BIAS_BULLISH ? bullBg : h4StructBias == BIAS_BEARISH ? bearBg : neutral
+    color sessionBg = inKillzone ? bullBg : neutral
+    color pdBg     = inPremium ? bearBg : inDiscount ? bullBg : neutral
+
+    string structureText = h1StructureText + "  |  " + m15StructureText
+    string sessionRowText = sessionText + (inKillzone ? "  (Killzone)" : "")
+    string nearestLiqText = "Above: " + nearestAboveText + "   Below: " + nearestBelowText
+    string nearestFvgText = (na(nearestBullFvgTop) ? "Bull: ---" : "Bull: " + str.tostring(nearestBullFvgTop)) + "   " +
+                             (na(nearestBearFvgTop) ? "Bear: ---" : "Bear: " + str.tostring(nearestBearFvgTop))
+    string nearestObText  = (na(nearestBullObTop) ? "Bull: ---" : "Bull: " + str.tostring(nearestBullObTop)) + "   " +
+                             (na(nearestBearObTop) ? "Bear: ---" : "Bear: " + str.tostring(nearestBearObTop))
+    string checklistRow1 = chk(checklistWeekly) + " Weekly   " + chk(checklistDaily) + " Daily   " + chk(checklistH4) + " H4   " + chk(checklistSession) + " Session"
+    string checklistRow2 = chk(checklistLiquiditySwept) + " Sweep   " + chk(checklistM15Shift) + " MSS   " + chk(checklistFvgFormed) + " FVG   " + chk(checklistEntryZoneReady) + " Entry Ready"
+
+    int r = 0
+    dashboardCell(0, r, "SMC Institutional", header, color.white)
+    dashboardCell(1, r, syminfo.ticker, header, color.white)
+    r += 1
+
+    dashboardCell(0, r, "Weekly", body, dashboardText)
+    dashboardCell(1, r, weeklyStateText, weeklyBg, color.white)
+    r += 1
+
+    dashboardCell(0, r, "Daily", body, dashboardText)
+    dashboardCell(1, r, dailyTrendText, dailyBg, color.white)
+    r += 1
+
+    dashboardCell(0, r, "H4", body, dashboardText)
+    dashboardCell(1, r, h4TrendText, h4Bg, color.white)
+    r += 1
+
+    dashboardCell(0, r, "H1 / M15", body, dashboardText)
+    dashboardCell(1, r, structureText, body, dashboardText)
+    r += 1
+
+    dashboardCell(0, r, "Session", body, dashboardText)
+    dashboardCell(1, r, sessionRowText, sessionBg, color.white)
+    r += 1
+
+    dashboardCell(0, r, "Dealing Range", body, dashboardText)
+    dashboardCell(1, r, premiumDiscountText, pdBg, color.white)
+    r += 1
+
+    dashboardCell(0, r, "Nearest Liquidity", body, dashboardText)
+    dashboardCell(1, r, nearestLiqText, body, dashboardText)
+    r += 1
+
+    dashboardCell(0, r, "Nearest FVG", body, dashboardText)
+    dashboardCell(1, r, nearestFvgText, body, dashboardText)
+    r += 1
+
+    dashboardCell(0, r, "Nearest OB", body, dashboardText)
+    dashboardCell(1, r, nearestObText, body, dashboardText)
+    r += 1
+
+    dashboardCell(0, r, "Setup Progress", body, dashboardText)
+    dashboardCell(1, r, checklistRow1, body, dashboardText)
+    r += 1
+
+    dashboardCell(0, r, "", body, dashboardText)
+    dashboardCell(1, r, checklistRow2, checklistEntryZoneReady ? bullBg : body, checklistEntryZoneReady ? color.white : dashboardText)
+
+if not showDashboard and barstate.islast
+    table.clear(dashboard, 0, 0, 1, 11)
