@@ -130,14 +130,22 @@ def load_all_models():
         team_mapping = joblib.load(load_file("team_mapping.pkl"))
         all_teams = joblib.load(load_file("all_teams.pkl"))
 
-        return final_model, dc_models, feature_cols, df, team_mapping, all_teams, None
+        # NEW (optional): current-season team metadata produced by train.py.
+        # Older model artifacts won't have this file — degrade gracefully
+        # rather than breaking the app.
+        try:
+            current_teams_meta = joblib.load(load_file("current_teams.pkl"))
+        except Exception:
+            current_teams_meta = None
+
+        return final_model, dc_models, feature_cols, df, team_mapping, all_teams, current_teams_meta, None
 
     except Exception as e:
-        return None, None, None, None, None, None, str(e)
+        return None, None, None, None, None, None, None, str(e)
 
 # Load models
 with st.spinner("🔄 Loading trained models..."):
-    final_model, dc_models, feature_cols, df, team_mapping, all_teams, error = load_all_models()
+    final_model, dc_models, feature_cols, df, team_mapping, all_teams, current_teams_meta, error = load_all_models()
 
 # Error handling
 if error:
@@ -219,6 +227,30 @@ with st.sidebar:
     
     **Teams:** {df['HomeTeam'].nunique()}
     """)
+
+    # NEW: training-history / current-season metadata, if available
+    # (produced by the updated train.py — degrades gracefully if the model
+    # artifacts predate this).
+    if current_teams_meta:
+        seasons_req = current_teams_meta.get('seasons_requested', [])
+        loaded = current_teams_meta.get('seasons_loaded', {})
+        current_by_league = current_teams_meta.get('current_teams_by_league', {})
+        latest_by_league = current_teams_meta.get('latest_season_by_league', {})
+
+        n_loaded_total = sum(len(v) for v in loaded.values())
+        n_requested_total = len(seasons_req) * max(len(loaded), 1)
+
+        current_teams_lines = "\n    ".join(
+            f"- **{lg}** ({latest_by_league.get(lg, '?')}): {len(teams)} teams"
+            for lg, teams in current_by_league.items()
+        )
+
+        st.info(f"""
+        **Training history:** {len(seasons_req)} seasons requested ({seasons_req[0] if seasons_req else '?'}–{seasons_req[-1] if seasons_req else '?'})
+
+        **Current teams loaded:**
+        {current_teams_lines}
+        """)
 
     st.markdown("---")
 
@@ -363,7 +395,12 @@ with tab1:
                 # predict_multiple_fixtures(fixtures, final_model, dc_models, feature_cols,
                 #                           df, team_mapping, all_teams, min_prob, min_ev)
                 try:
-                    results, prediction_warnings, prediction_errors = predict_multiple_fixtures(
+                    # FIX (bug #27): predict_multiple_fixtures returns
+                    # (results, errors, warnings_collected) — errors second,
+                    # warnings third. This used to be unpacked backwards,
+                    # which silently swapped the "Warnings" and "Errors"
+                    # expanders below.
+                    results, prediction_errors, prediction_warnings = predict_multiple_fixtures(
                         fixtures,
                         final_model,
                         dc_models,
@@ -388,7 +425,7 @@ with tab1:
                         min_ev=min_ev
                     )
                     if len(raw) == 3:
-                        results, prediction_warnings, prediction_errors = raw
+                        results, prediction_errors, prediction_warnings = raw
                     else:
                         results, prediction_errors = raw
                         prediction_warnings = []

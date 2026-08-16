@@ -18,36 +18,36 @@ from models import (
 def normalize_team_name(team_name, team_mapping, all_teams, league, df):
     """
     Normalize team name with user feedback.
-    
+
     IMPROVED:
     - Returns suggestion if fuzzy match
     - Shows all possible matches
     - Allows manual override
     """
-    
+
     # Direct match
     if team_name in all_teams:
         return team_name, 1.0, None
-    
+
     # Mapping match
     if team_name in team_mapping:
         return team_mapping[team_name], 0.9, None
-    
+
     # Case-insensitive
     lower = team_name.lower()
     if lower in team_mapping:
         return team_mapping[lower], 0.9, None
-    
+
     # League-specific teams
     league_teams = set(df[df['League'] == league]['HomeTeam'].unique())
-    
+
     if team_name in league_teams:
         return team_name, 1.0, None
-    
+
     # Fuzzy match with user notification
     from difflib import get_close_matches
     matches = get_close_matches(team_name, league_teams, n=3, cutoff=0.6)
-    
+
     if matches:
         # Return best match + suggestions
         return matches[0], 0.7, {
@@ -55,7 +55,7 @@ def normalize_team_name(team_name, team_mapping, all_teams, league, df):
             'suggestions': matches,
             'warning': f"'{team_name}' not found. Using '{matches[0]}'. Other options: {matches[1:]}"
         }
-    
+
     # No match found
     return None, 0.0, {
         'original': team_name,
@@ -64,44 +64,120 @@ def normalize_team_name(team_name, team_mapping, all_teams, league, df):
     }
 
 
-def get_latest_features(df, feature_cols, league, home, away):
+# Feature-column classification used by get_fixture_features below.
+# 'home' columns describe the HOME team's own recent home-match record and
+# should be sourced from that team's most recent match AS HOME TEAM.
+# 'away' columns describe the AWAY team's own recent away-match record and
+# should be sourced from that team's most recent match AS AWAY TEAM.
+# 'diff' columns are recomputed from the resolved home/away values rather
+# than copied from either source row, since they compare the two teams
+# directly and a copied value would reflect the wrong pairing.
+_HOME_PREFIXES = ('HGS_', 'HGC_', 'HS_', 'HST_', 'HC_', 'HForm')
+_AWAY_PREFIXES = ('AGS_', 'AGC_', 'AS_', 'AST_', 'AC_', 'AForm')
+_DIFF_COLS = {
+    'AttackDiff': ('HGS_L5', 'AGC_L5'),
+    'DefenseDiff': ('HGC_L5', 'AGS_L5'),
+    'ShotDiff': ('HS_L5', 'AS_L5'),
+    'ShotTargetDiff': ('HST_L5', 'AST_L5'),
+    'CornerDiff': ('HC_L5', 'AC_L5'),
+}
+
+
+def get_fixture_features(df, feature_cols, league, home, away):
     """
-    Get latest valid features with PROPER VALIDATION.
-    
-    CRITICAL FIX:
-    - Validates feature count
-    - Validates feature order
-    - Uses latest row (not average!)
+    Build a feature vector for a SPECIFIC upcoming fixture (home vs away),
+    rather than grabbing the single most recent row involving either team.
+
+    CRITICAL FIX (replaces the old get_latest_features):
+    The old approach pulled the last row where either team appeared in
+    ANY role (home or away, against ANY opponent) and used that row's
+    features wholesale. Because feature columns are role-specific
+    (e.g. 'HGS_L5' = the row's home team's scoring form), that row's
+    values often did not correspond to `home` playing at home and `away`
+    playing away at all — e.g. it could be a row for "Away vs Someone
+    Else" where "Away" was actually the home team of that historical row.
+
+    The fix: pull `home`'s own most recent HOME-role features, and
+    `away`'s own most recent AWAY-role features, independently, then
+    recompute the matchup-differential columns and set the league
+    dummies for the target league. This mirrors exactly what train.py
+    computes per-row, just assembled for a hypothetical fixture rather
+    than read off an existing one.
     """
-    
-    # Get recent matches
-    recent = df[
-        (df['League'] == league) & 
-        ((df['HomeTeam'] == home) | (df['AwayTeam'] == away) |
-         (df['HomeTeam'] == away) | (df['AwayTeam'] == home))
-    ].tail(20)
-    
-    if len(recent) == 0:
-        recent = df[df['League'] == league].tail(50)
-    
-    if len(recent) == 0:
-        raise ValueError(f"No data for league: {league}")
-    
-    # Get latest valid row
-    valid = recent.dropna(subset=feature_cols)
-    
-    if len(valid) == 0:
-        # Fallback to mean
-        features = recent[feature_cols].mean().fillna(0).values
-    else:
-        # CRITICAL: Use latest row, not average!
-        features = valid[feature_cols].iloc[-1].fillna(0).values
-    
-    # VALIDATION
+
+    league_df = df[df['League'] == league].sort_values('Date')
+
+    home_rows = league_df[league_df['HomeTeam'] == home]
+    away_rows = league_df[league_df['AwayTeam'] == away]
+
+    missing_data_flag = False
+
+    if len(home_rows) == 0:
+        # No home-role history for this team in this league; fall back to
+        # any recent row involving them so we don't hard-crash, but flag it.
+        home_rows = league_df[
+            (league_df['HomeTeam'] == home) | (league_df['AwayTeam'] == home)
+        ]
+        missing_data_flag = True
+
+    if len(away_rows) == 0:
+        away_rows = league_df[
+            (league_df['HomeTeam'] == away) | (league_df['AwayTeam'] == away)
+        ]
+        missing_data_flag = True
+
+    if len(home_rows) == 0 or len(away_rows) == 0:
+        raise ValueError(f"No historical data for {home} or {away} in {league}")
+
+    home_row = home_rows.dropna(subset=[c for c in feature_cols if c.startswith(_HOME_PREFIXES) or c == 'ELO_home'])
+    home_row = home_row.iloc[-1] if len(home_row) > 0 else home_rows.iloc[-1]
+
+    away_row = away_rows.dropna(subset=[c for c in feature_cols if c.startswith(_AWAY_PREFIXES) or c == 'ELO_away'])
+    away_row = away_row.iloc[-1] if len(away_row) > 0 else away_rows.iloc[-1]
+
+    values = {}
+
+    for col in feature_cols:
+        if col == 'ELO_home':
+            values[col] = home_row.get('ELO_home', np.nan)
+        elif col == 'ELO_away':
+            values[col] = away_row.get('ELO_away', np.nan)
+        elif col == 'ELO_diff':
+            continue  # recomputed below
+        elif col in _DIFF_COLS:
+            continue  # recomputed below
+        elif col.startswith('Lg_'):
+            values[col] = 1.0 if col == f'Lg_{league}' else 0.0
+        elif col.startswith(_HOME_PREFIXES):
+            values[col] = home_row.get(col, np.nan)
+        elif col.startswith(_AWAY_PREFIXES):
+            values[col] = away_row.get(col, np.nan)
+        else:
+            # Unrecognized column pattern: best-effort, prefer home row.
+            values[col] = home_row.get(col, away_row.get(col, np.nan))
+
+    # Recompute differential columns from the resolved values so they
+    # actually compare `home` against `away`, not two mismatched rows.
+    for diff_col, (a, b) in _DIFF_COLS.items():
+        if diff_col in feature_cols:
+            va = values.get(a, np.nan)
+            vb = values.get(b, np.nan)
+            values[diff_col] = (va if va == va else 0) - (vb if vb == vb else 0)
+
+    if 'ELO_diff' in feature_cols:
+        eh = values.get('ELO_home', np.nan)
+        ea = values.get('ELO_away', np.nan)
+        values['ELO_diff'] = (eh if eh == eh else 1500) - (ea if ea == ea else 1500)
+
+    features = np.array([
+        values.get(c, 0.0) if values.get(c, np.nan) == values.get(c, np.nan) else 0.0
+        for c in feature_cols
+    ], dtype=float)
+
     assert len(features) == len(feature_cols), \
         f"Feature count mismatch! Expected {len(feature_cols)}, got {len(features)}"
-    
-    return features
+
+    return features, missing_data_flag
 
 
 def predict_with_fallback(
@@ -116,44 +192,49 @@ def predict_with_fallback(
 ):
     """
     Predict with fallback for missing teams.
-    
+
     CRITICAL FIX:
     - If team not found in DC → use league average parameters
     - No crash on unknown teams
     """
-    
+
     league = fixture['league']
     home = fixture['home']
     away = fixture['away']
-    
+
     # Normalize teams
     home_norm, home_conf, home_info = normalize_team_name(home, team_mapping, all_teams, league, df)
     away_norm, away_conf, away_info = normalize_team_name(away, team_mapping, all_teams, league, df)
-    
+
     # Collect warnings/errors
     warnings = []
-    
+
     if home_info and 'warning' in home_info:
         warnings.append(home_info['warning'])
     if away_info and 'warning' in away_info:
         warnings.append(away_info['warning'])
-    
+
     if not home_norm or not away_norm:
         error_msg = ""
         if not home_norm and home_info:
             error_msg += home_info.get('error', f"Team not found: {home}")
         if not away_norm and away_info:
             error_msg += " | " + away_info.get('error', f"Team not found: {away}")
-        
+
         raise ValueError(error_msg)
-    
+
     # Check league
     if league not in dc_models:
         raise ValueError(f"League not supported: {league}")
-    
-    # Get features
-    features = get_latest_features(df, feature_cols, league, home_norm, away_norm)
-    
+
+    # Get fixture-specific features (FIXED: no longer a mismatched last row)
+    features, low_data = get_fixture_features(df, feature_cols, league, home_norm, away_norm)
+    if low_data:
+        warnings.append(
+            f"Limited home/away-specific history for {home_norm} or {away_norm}; "
+            f"features may be less reliable."
+        )
+
     # Try prediction with fallback
     try:
         # Standard prediction
@@ -161,40 +242,46 @@ def predict_with_fallback(
             final_model, dc_models, league, home_norm, away_norm, features
         )
         used_fallback = False
-        
+
     except ValueError as e:
         # Team not in Dixon-Coles model
         if not use_fallback:
             raise
-        
+
         # FALLBACK: Use league average
         warnings.append(f"Using league average for unknown team")
-        
+
         league_data = df[df['League'] == league].tail(100)
-        
+
         avg_home_prob = (league_data['FTR'] == 'H').mean()
         avg_draw_prob = (league_data['FTR'] == 'D').mean()
         avg_away_prob = (league_data['FTR'] == 'A').mean()
-        
+
         probs = np.array([avg_home_prob, avg_draw_prob, avg_away_prob])
-        
+
+        # Estimate over/under 2.5 from the league's actual recent scoring
+        # rate instead of assuming a flat 50/50 split.
+        total_goals = league_data['FTHG'] + league_data['FTAG']
+        prob_over25 = float((total_goals > 2.5).mean()) if len(league_data) > 0 else 0.5
+        prob_over25 = prob_over25 if prob_over25 == prob_over25 else 0.5  # guard NaN
+
         dc_pred = {
             'lambda_home': league_data['FTHG'].mean(),
             'lambda_away': league_data['FTAG'].mean(),
             'exp_goals': league_data['FTHG'].mean() + league_data['FTAG'].mean(),
-            'prob_over_25': 0.5,
-            'prob_under_25': 0.5,
+            'prob_over_25': prob_over25,
+            'prob_under_25': 1 - prob_over25,
             'score_matrix': None
         }
-        
+
         used_fallback = True
-    
+
     # Build market probabilities
     market_probs = build_market_probabilities(probs, dc_pred)
-    
+
     # Calculate confidence
     confidence = calculate_confidence_score(probs)
-    
+
     # Prepare result
     result = {
         'league': league,
@@ -212,12 +299,12 @@ def predict_with_fallback(
         'warnings': warnings,
         'used_fallback': used_fallback
     }
-    
+
     # Calculate value if odds provided
     if 'odds' in fixture:
         all_values = calculate_value(market_probs, fixture['odds'])
         result['all_bets'] = all_values
-    
+
     return result
 
 
@@ -234,17 +321,17 @@ def predict_multiple_fixtures(
 ):
     """
     Predict multiple fixtures with proper error handling.
-    
-    IMPROVED:
-    - Collects all warnings
-    - Uses fallback for unknown teams
-    - Validates all features
+
+    Returns:
+        results, errors, warnings_collected
+        (NOTE: this order is errors-then-warnings; callers must unpack in
+        this order. See app.py FIX.)
     """
-    
+
     results = []
     errors = []
     warnings_collected = []
-    
+
     for i, fixture in enumerate(fixtures, 1):
         try:
             result = predict_with_fallback(
@@ -257,11 +344,11 @@ def predict_multiple_fixtures(
                 all_teams,
                 use_fallback=True
             )
-            
+
             # Collect warnings
             if result['warnings']:
                 warnings_collected.extend(result['warnings'])
-            
+
             # Find value bets
             if 'all_bets' in result:
                 value_bets = find_value_bets(
@@ -270,31 +357,31 @@ def predict_multiple_fixtures(
                     min_ev=min_ev
                 )
                 result['value_bets'] = value_bets
-                
+
                 # Add Kelly stakes
                 for bet in value_bets:
                     bet['kelly_stake'] = calculate_kelly_stake(bet['prob'], bet['odds'])
-            
+
             results.append(result)
-            
+
         except Exception as e:
             errors.append({
                 'fixture': f"{fixture['home']} vs {fixture['away']}",
                 'error': str(e)
             })
-    
+
     return results, errors, warnings_collected
 
 
 def generate_summary_stats(results):
     """Generate summary statistics."""
-    
+
     total_matches = len(results)
-    
+
     matches_with_value = sum(1 for r in results if len(r['value_bets']) > 0)
-    
+
     total_value_bets = sum(len(r['value_bets']) for r in results)
-    
+
     if total_value_bets > 0:
         avg_ev = np.mean([bet['ev'] for r in results for bet in r['value_bets']])
         avg_prob = np.mean([bet['prob'] for r in results for bet in r['value_bets']])
@@ -303,16 +390,16 @@ def generate_summary_stats(results):
         avg_ev = 0
         avg_prob = 0
         avg_odds = 0
-    
+
     confidences = [r['confidence'] for r in results]
     avg_confidence = np.mean(confidences)
-    
+
     exp_goals = [r['exp_goals'] for r in results]
     avg_exp_goals = np.mean(exp_goals)
-    
+
     # Count fallback usage
     fallback_count = sum(1 for r in results if r.get('used_fallback', False))
-    
+
     summary = {
         'total_matches': total_matches,
         'matches_with_value': matches_with_value,
@@ -325,22 +412,22 @@ def generate_summary_stats(results):
         'hit_rate': matches_with_value / total_matches if total_matches > 0 else 0,
         'fallback_used': fallback_count
     }
-    
+
     return summary
 
 
 def rank_top_value_bets(results, n=7):
     """
     Rank ALL value bets across matches.
-    
+
     IMPROVED:
     - Groups by market type
     - Shows best per market
     - Cross-match ranking
     """
-    
+
     all_bets = []
-    
+
     for result in results:
         for bet in result['value_bets']:
             all_bets.append({
@@ -355,31 +442,31 @@ def rank_top_value_bets(results, n=7):
                 'exp_goals': result['exp_goals'],
                 'confidence': result['confidence']
             })
-    
+
     # Sort by EV
     all_bets = sorted(all_bets, key=lambda x: x['ev'], reverse=True)
-    
+
     return all_bets[:n]
 
 
 def group_bets_by_market(results):
     """
     Group value bets by market type.
-    
+
     NEW FUNCTION:
     - Shows best opportunities per market
     - Helps identify market-specific edges
     """
-    
+
     markets = {}
-    
+
     for result in results:
         for bet in result['value_bets']:
             market_type = bet['market']
-            
+
             if market_type not in markets:
                 markets[market_type] = []
-            
+
             markets[market_type].append({
                 'match': f"{result['home']} vs {result['away']}",
                 'league': result['league'],
@@ -388,28 +475,28 @@ def group_bets_by_market(results):
                 'ev': bet['ev'],
                 'kelly': bet['kelly_stake']
             })
-    
+
     # Sort each market by EV
     for market in markets:
         markets[market] = sorted(markets[market], key=lambda x: x['ev'], reverse=True)
-    
+
     return markets
 
 
 def simulate_bankroll(top_bets, initial_bankroll=1000):
     """Simulate bankroll with Kelly criterion."""
-    
+
     bankroll = initial_bankroll
     total_staked = 0
-    
+
     bets_placed = []
-    
+
     for bet in top_bets:
         stake_pct = bet['kelly_stake']
         stake_amount = bankroll * stake_pct
-        
+
         total_staked += stake_amount
-        
+
         bets_placed.append({
             'match': bet['match'],
             'market': bet['market'],
@@ -418,11 +505,11 @@ def simulate_bankroll(top_bets, initial_bankroll=1000):
             'prob': bet['prob'],
             'ev': bet['ev']
         })
-    
+
     expected_profit = sum(b['stake'] * b['ev'] for b in bets_placed)
     expected_bankroll = bankroll + expected_profit
     expected_roi = (expected_profit / total_staked * 100) if total_staked > 0 else 0
-    
+
     return {
         'initial_bankroll': initial_bankroll,
         'total_staked': total_staked,

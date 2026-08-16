@@ -12,7 +12,7 @@ from scipy.special import softmax
 class DixonColesTimeDecay:
     """
     Dixon-Coles model with time decay weighting.
-    
+
     Full implementation with:
     - Poisson-based goal modeling
     - Home advantage parameter
@@ -20,7 +20,7 @@ class DixonColesTimeDecay:
     - Time decay weighting
     - Maximum likelihood estimation
     """
-    
+
     def __init__(self, xi=0.002, max_goals=10):
         """
         Args:
@@ -34,119 +34,125 @@ class DixonColesTimeDecay:
         self.defence = None
         self.home_adv = None
         self.rho = None
-    
+
     def fit(self, df, league=None):
         """
         Fit Dixon-Coles model using MLE.
-        
+
         Args:
             df: DataFrame with match history
             league: League to fit (None = all data)
-        
+
         Returns:
             self
         """
-        
+
         if league:
             data = df[df['League'] == league].copy()
         else:
             data = df.copy()
-        
+
         data = data.sort_values('Date')
-        
+
         self.teams = sorted(set(data['HomeTeam']) | set(data['AwayTeam']))
         n = len(self.teams)
-        
+
         team_to_idx = {team: i for i, team in enumerate(self.teams)}
-        
+
         home_idx = data['HomeTeam'].map(team_to_idx).values
         away_idx = data['AwayTeam'].map(team_to_idx).values
         hg = data['FTHG'].values
         ag = data['FTAG'].values
         days = data['DaysSinceMatch'].values
-        
+
         weights = np.exp(-self.xi * days)
-        
+
         def nll(params):
             """Negative log-likelihood with Dixon-Coles correction."""
             att = params[:n]
             deff = params[n:2*n]
             home = params[2*n]
             rho = params[2*n+1]
-            
+
             att = att - np.mean(att)
-            
+
             lh = np.exp(home + att[home_idx] - deff[away_idx])
             la = np.exp(att[away_idx] - deff[home_idx])
-            
+
             p = poisson.pmf(hg, lh) * poisson.pmf(ag, la)
-            
+
             corr = np.ones_like(p)
             mask00 = (hg == 0) & (ag == 0)
             mask01 = (hg == 0) & (ag == 1)
             mask10 = (hg == 1) & (ag == 0)
             mask11 = (hg == 1) & (ag == 1)
-            
+
             corr[mask00] = 1 - lh[mask00] * la[mask00] * rho
             corr[mask01] = 1 + lh[mask01] * rho
             corr[mask10] = 1 + la[mask10] * rho
             corr[mask11] = 1 - rho
-            
+
             p *= corr
             ll = np.sum(weights * np.log(np.maximum(p, 1e-12)))
-            
+
             return -ll
-        
+
         x0 = np.concatenate([np.zeros(n), np.zeros(n), [0.25], [0]])
         bounds = [(-3,3)]*(2*n) + [(0,0.5), (-0.1,0.1)]
-        
+
         res = minimize(nll, x0, method='L-BFGS-B', bounds=bounds, options={'maxiter': 200})
-        
+
         params = res.x
         att = params[:n] - np.mean(params[:n])
         deff = params[n:2*n]
-        
+
         self.attack = dict(zip(self.teams, att))
         self.defence = dict(zip(self.teams, deff))
         self.home_adv = params[2*n]
         self.rho = params[2*n+1]
-        
+
         return self
-    
+
     def predict(self, home, away):
         """
         Generate full match prediction.
-        
+
         Returns:
             Dictionary with probabilities, expected goals, score matrix
         """
-        
+
         if home not in self.attack or away not in self.attack:
             raise ValueError(f"Team not found: {home} or {away}")
-        
+
         lh = np.exp(self.home_adv + self.attack[home] - self.defence[away])
         la = np.exp(self.attack[away] - self.defence[home])
-        
+
         max_g = self.max_goals
-        
+
         home_probs = poisson.pmf(range(max_g+1), lh)
         away_probs = poisson.pmf(range(max_g+1), la)
-        
+
         score_matrix = np.outer(home_probs, away_probs)
-        
+
         score_matrix[0,0] *= (1 - lh*la*self.rho)
         score_matrix[0,1] *= (1 + lh*self.rho)
         score_matrix[1,0] *= (1 + la*self.rho)
         score_matrix[1,1] *= (1 - self.rho)
-        
+
+        # Re-normalize: the Dixon-Coles low-score correction perturbs four
+        # cells of a matrix that was already truncated at max_goals, so the
+        # matrix is no longer guaranteed to sum to 1. Renormalize before it
+        # is used to derive any market probability.
+        score_matrix = score_matrix / score_matrix.sum()
+
         prob_home = np.tril(score_matrix, -1).sum()
         prob_draw = np.trace(score_matrix)
         prob_away = np.triu(score_matrix, 1).sum()
-        
+
         total_goals = np.add.outer(range(max_g+1), range(max_g+1))
         prob_over25 = score_matrix[total_goals > 2.5].sum()
         prob_under25 = 1 - prob_over25
-        
+
         return {
             'lambda_home': float(lh),
             'lambda_away': float(la),
@@ -163,11 +169,11 @@ class DixonColesTimeDecay:
 def ensemble_prediction(final_model, dc_models, league, home, away, features, dc_weight=0.6):
     """
     Ensemble prediction via log-odds pooling.
-    
+
     Combines:
     - Dixon-Coles (Poisson-based)
     - XGBoost (ML-based)
-    
+
     Args:
         final_model: Trained ML model
         dc_models: Dict of Dixon-Coles models by league
@@ -176,134 +182,235 @@ def ensemble_prediction(final_model, dc_models, league, home, away, features, dc
         away: Away team
         features: Feature vector for ML
         dc_weight: Weight for Dixon-Coles (default 0.6)
-    
+
     Returns:
         probs: [home, draw, away] probabilities
         dc_pred: Full Dixon-Coles prediction dict
     """
-    
+
     # Dixon-Coles prediction
     dc_pred = dc_models[league].predict(home, away)
-    
+
     dc_probs = np.array([
         dc_pred['prob_home'],
         dc_pred['prob_draw'],
         dc_pred['prob_away']
     ])
-    
+
     # ML prediction
     ml_probs = final_model.predict_proba(features.reshape(1, -1))[0]
-    
+
     # Safety clipping
     dc_probs = np.clip(dc_probs, 1e-9, 1 - 1e-9)
     ml_probs = np.clip(ml_probs, 1e-9, 1 - 1e-9)
-    
+
     # Log-odds pooling
     dc_log = np.log(dc_probs)
     ml_log = np.log(ml_probs)
-    
+
     combined_log = dc_weight * dc_log + (1 - dc_weight) * ml_log
-    
+
     # Normalize
     probs = softmax(combined_log)
-    
+
     return probs, dc_pred
+
+
+def _goal_market_probs(score_matrix, max_g):
+    """Derive Over/Under and BTTS probabilities directly from the score matrix."""
+
+    markets = {}
+    total_goals = np.add.outer(range(max_g + 1), range(max_g + 1))
+
+    for line in [0.5, 1.5, 2.5, 3.5, 4.5]:
+        over = float(score_matrix[total_goals > line].sum())
+        markets[f'Over {line}'] = over
+        markets[f'Under {line}'] = 1 - over
+
+    # BTTS: both teams score means home goals >= 1 AND away goals >= 1
+    btts_yes = float(score_matrix[1:, 1:].sum())
+    markets['BTTS Yes'] = btts_yes
+    markets['BTTS No'] = 1 - btts_yes
+
+    return markets
+
+
+def _asian_handicap_probs(score_matrix, max_g):
+    """
+    Derive Asian Handicap probabilities directly from the score matrix,
+    rather than approximating with a sigmoid on the lambda difference.
+
+    For a given home handicap h (e.g. -0.5, -1.0, +0.5), the home side
+    covers when (home_goals + h) > away_goals. Quarter lines (.25/.75)
+    split the stake between the two adjacent half/whole lines, but we
+    only expose the common half/whole lines here.
+    """
+
+    home_goals = np.arange(max_g + 1).reshape(-1, 1)
+    away_goals = np.arange(max_g + 1).reshape(1, -1)
+    diff = home_goals - away_goals  # broadcast to (max_g+1, max_g+1)
+
+    markets = {}
+    for h in [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5]:
+        adjusted = diff + h
+        home_covers = score_matrix[adjusted > 0].sum()
+        away_covers = score_matrix[adjusted < 0].sum()
+        push = score_matrix[adjusted == 0].sum()
+
+        # For whole-number lines a push refunds the stake; report probability
+        # of covering conditional on not pushing, which is the standard way
+        # AH probabilities are quoted.
+        denom = home_covers + away_covers
+        if denom > 0:
+            home_prob = home_covers / denom
+            away_prob = away_covers / denom
+        else:
+            home_prob = away_prob = 0.5
+
+        label = f"{h:+.1f}".rstrip('0').rstrip('.') if h != 0 else "0"
+        markets[f'AH Home {label}'] = float(home_prob)
+        markets[f'AH Away {label}'] = float(away_prob)
+
+    return markets
 
 
 def build_market_probabilities(probs, dc_pred):
     """
     Build probabilities for all betting markets.
-    
+
     Markets:
     - 1X2 (Home/Draw/Away)
-    - Over/Under 2.5
+    - Over/Under (0.5 through 4.5)
+    - BTTS
     - Double Chance (1X, X2, 12)
     - Draw No Bet (DNB Home, DNB Away)
-    - Asian Handicap (estimated from lambda difference)
-    
+    - Asian Handicap (derived from the score matrix, not a sigmoid approximation)
+
     Args:
         probs: [home, draw, away] probabilities from ensemble
         dc_pred: Dixon-Coles prediction dict
-    
+
     Returns:
         Dictionary of all market probabilities
     """
-    
+
     markets = {}
-    
+
     # 1X2
     markets['Home'] = float(probs[0])
     markets['Draw'] = float(probs[1])
     markets['Away'] = float(probs[2])
-    
-    # Over/Under 2.5
-    markets['Over 2.5'] = dc_pred['prob_over_25']
-    markets['Under 2.5'] = dc_pred['prob_under_25']
-    
+
     # Double Chance
     markets['1X'] = probs[0] + probs[1]  # Home or Draw
     markets['X2'] = probs[1] + probs[2]  # Draw or Away
     markets['12'] = probs[0] + probs[2]  # Home or Away (no draw)
-    
+
     # Draw No Bet
     home_dnb = probs[0] / (probs[0] + probs[2])
     away_dnb = probs[2] / (probs[0] + probs[2])
     markets['DNB Home'] = float(home_dnb)
     markets['DNB Away'] = float(away_dnb)
-    
-    # Asian Handicap (estimated from lambda difference)
-    lambda_diff = dc_pred['lambda_home'] - dc_pred['lambda_away']
-    
-    # Sigmoid transformation for handicap coverage
-    ah_home = 1 / (1 + np.exp(-lambda_diff))
-    ah_away = 1 - ah_home
-    
-    markets['AH Home'] = float(ah_home)
-    markets['AH Away'] = float(ah_away)
-    
+
+    score_matrix = dc_pred.get('score_matrix')
+
+    if score_matrix is not None:
+        max_g = score_matrix.shape[0] - 1
+
+        # Goal markets + BTTS derived straight from the score matrix
+        markets.update(_goal_market_probs(score_matrix, max_g))
+
+        # Asian Handicap derived straight from the score matrix
+        markets.update(_asian_handicap_probs(score_matrix, max_g))
+    else:
+        # Fallback path (e.g. unknown-team league-average fallback in predict.py,
+        # where no score matrix is available). Only the 2.5 line is provided
+        # by the caller in that case.
+        markets['Over 2.5'] = dc_pred.get('prob_over_25', 0.5)
+        markets['Under 2.5'] = dc_pred.get('prob_under_25', 0.5)
+
     return markets
+
+
+def no_vig_probabilities(odds):
+    """
+    Convert bookmaker odds for a market group (e.g. Home/Draw/Away, or
+    Over/Under) into overround-free ("no-vig") probabilities.
+
+    Args:
+        odds: Dict mapping outcome name -> decimal odds, for outcomes that
+              are mutually exclusive and collectively exhaustive (e.g.
+              {'Home': 2.1, 'Draw': 3.4, 'Away': 3.5})
+
+    Returns:
+        Dict mapping outcome name -> no-vig probability, plus the overround
+        under the key '_overround' (e.g. 0.06 means a 6% margin).
+    """
+
+    implied = {k: 1.0 / v for k, v in odds.items() if v and v > 1.0}
+
+    if not implied:
+        return {}
+
+    total = sum(implied.values())
+
+    no_vig = {k: v / total for k, v in implied.items()}
+    no_vig['_overround'] = total - 1.0
+
+    return no_vig
 
 
 def calculate_value(market_probs, bookmaker_odds):
     """
-    Calculate betting value (EV and edge) for each market.
-    
+    Calculate betting value (edge and EV) for each market, benchmarked
+    against the no-vig market probability rather than raw implied odds.
+
     Args:
-        market_probs: Dict of market probabilities
-        bookmaker_odds: Dict of bookmaker odds
-    
+        market_probs: Dict of model market probabilities
+        bookmaker_odds: Dict of bookmaker odds, either flat
+            {market_name: odds} or grouped by market family
+            {'1X2': {'Home': odds, 'Draw': odds, 'Away': odds}, ...}
+            so overround can be removed per group. A flat dict is treated
+            as a single group.
+
     Returns:
-        List of dicts with market, prob, odds, edge, EV
+        List of dicts with market, prob, odds, market_prob (no-vig), edge, EV
     """
-    
+
     value_bets = []
-    
-    for market, model_prob in market_probs.items():
-        if market not in bookmaker_odds:
-            continue
-        
-        odds = bookmaker_odds[market]
-        
-        if odds is None or odds <= 1.0:
-            continue
-        
-        # Calculate implied probability (with margin)
-        implied_prob = 1 / odds
-        
-        # Edge = model probability - implied probability
-        edge = model_prob - implied_prob
-        
-        # Expected Value = (prob * odds) - 1
-        ev = (model_prob * odds) - 1
-        
-        value_bets.append({
-            'market': market,
-            'prob': model_prob,
-            'odds': odds,
-            'edge': edge,
-            'ev': ev
-        })
-    
+
+    # Normalize input into groups of mutually exclusive outcomes so overround
+    # can be computed. If the caller passed a flat {market: odds} dict, treat
+    # it as one group (this still removes vig across whatever's provided).
+    if bookmaker_odds and all(isinstance(v, (int, float)) for v in bookmaker_odds.values()):
+        groups = {'_all': bookmaker_odds}
+    else:
+        groups = bookmaker_odds
+
+    for group_name, group_odds in groups.items():
+        novig = no_vig_probabilities(group_odds)
+
+        for market, odds in group_odds.items():
+            if market not in market_probs:
+                continue
+            if odds is None or odds <= 1.0:
+                continue
+
+            model_prob = market_probs[market]
+            market_prob = novig.get(market, 1.0 / odds)  # no-vig if available
+
+            edge = model_prob - market_prob
+            ev = (model_prob * odds) - 1
+
+            value_bets.append({
+                'market': market,
+                'prob': model_prob,
+                'odds': odds,
+                'market_prob': market_prob,
+                'edge': edge,
+                'ev': ev
+            })
+
     return value_bets
 
 

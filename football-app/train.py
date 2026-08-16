@@ -41,7 +41,7 @@ LEAGUES = {
     "Ligue 1": "F1"
 }
 
-def get_last_n_seasons(n=5):
+def get_last_n_seasons(n=10):
     """Get last N seasons dynamically."""
     current_year = datetime.now().year
     if datetime.now().month < 8:
@@ -58,36 +58,74 @@ def get_last_n_seasons(n=5):
 # STEP 1: DATA LOADING WITH CACHING
 # ============================================================================
 
-def load_data_with_cache(force_refresh=False):
-    """Load data with local caching to avoid repeated downloads."""
-    
+CACHE_VERSION = "v2-10season-availflags"  # bump this whenever the schema of
+                                            # the cached raw/feature data changes,
+                                            # so stale caches auto-invalidate.
+
+
+def load_data_with_cache(force_refresh=False, n_seasons=10):
+    """
+    Load data with local caching to avoid repeated downloads.
+
+    FIX: the cache is now versioned by (CACHE_VERSION, requested season list).
+    If either changes (e.g. moving from 5 to 10 seasons) the cache is
+    automatically rebuilt instead of silently serving stale 5-season data.
+
+    Returns:
+        df, load_report
+        load_report = {
+            'seasons_requested': [...],
+            'loaded': {league: [seasons successfully loaded]},
+            'failed': {league: [seasons unavailable/failed]},
+        }
+    """
+
+    seasons = get_last_n_seasons(n_seasons)
+
     cache_file = CACHE_DIR / "raw_data.pkl"
-    
-    # Check cache
-    if cache_file.exists() and not force_refresh:
-        print("📦 Loading from cache...")
-        df = joblib.load(cache_file)
-        print(f"✅ Loaded {len(df):,} matches from cache")
-        return df
-    
+    meta_file = CACHE_DIR / "raw_data_meta.pkl"
+
+    # Check cache — only reuse it if the version AND season list match exactly
+    if cache_file.exists() and meta_file.exists() and not force_refresh:
+        cached_meta = joblib.load(meta_file)
+        if cached_meta.get('version') == CACHE_VERSION and cached_meta.get('seasons_requested') == seasons:
+            print("📦 Loading from cache (season list & schema match)...")
+            df = joblib.load(cache_file)
+            print(f"✅ Loaded {len(df):,} matches from cache")
+            return df, cached_meta['load_report']
+        else:
+            print("♻️  Cache is stale (season list or schema changed) — rebuilding from source...")
+
     print("\n📥 Downloading fresh data from football-data.co.uk...")
-    
-    seasons = get_last_n_seasons(5)
+    print(f"Requested seasons ({len(seasons)}): {seasons}")
+
     all_data = []
-    
+    loaded = {league: [] for league in LEAGUES}
+    failed = {league: [] for league in LEAGUES}
+
     for league_name, league_code in LEAGUES.items():
         print(f"\n{league_name}:")
         for season in seasons:
             url = f"https://www.football-data.co.uk/mmz4281/{season}/{league_code}.csv"
             try:
                 df_temp = pd.read_csv(url, encoding='latin1', on_bad_lines='skip')
+                if df_temp is None or len(df_temp) == 0:
+                    raise ValueError("empty response")
                 df_temp['League'] = league_name
                 df_temp['Season'] = season
                 all_data.append(df_temp)
+                loaded[league_name].append(season)
                 print(f"  ✅ {season}: {len(df_temp)} matches")
             except Exception as e:
-                print(f"  ⚠️  {season}: Failed")
-    
+                failed[league_name].append(season)
+                print(f"  ⚠️  {season}: Unavailable/failed ({e})")
+
+    if not all_data:
+        raise RuntimeError(
+            "No season data could be loaded for any league. "
+            "Check network access to football-data.co.uk and the season codes."
+        )
+
     df = pd.concat(all_data, ignore_index=True)
     
     # Process
@@ -103,44 +141,108 @@ def load_data_with_cache(force_refresh=False):
     df['Outcome'] = df['FTR'].map({'H': 0, 'D': 1, 'A': 2})
     df['DaysSinceMatch'] = (df['Date'].max() - df['Date']).dt.days
     
-    # Ensure shot/corner columns
+    # Ensure shot/corner columns.
+    # FIX (leakage): the previous version imputed missing values using
+    # df.groupby('League')[col].transform('mean') — a mean computed over the
+    # ENTIRE league history, including matches that happen AFTER the match
+    # being imputed. That leaks future information into a training row.
+    #
+    # Time-safe hierarchy used instead (each step uses ONLY matches strictly
+    # before the current one — df is already sorted chronologically by Date
+    # at this point):
+    #   1. This team's own last recorded value for that stat, in that role
+    #      (HomeTeam for H* columns, AwayTeam for A* columns)
+    #   2. The league's running (expanding) historical mean up to that point
+    #   3. The global running (expanding) historical mean up to that point
+    #   4. A fixed neutral fallback (overall median) — only ever hit for the
+    #      first few rows of the whole dataset, where no prior history exists
+    _ROLE_COL = {
+        'HS': 'HomeTeam', 'HST': 'HomeTeam', 'HC': 'HomeTeam',
+        'AS': 'AwayTeam', 'AST': 'AwayTeam', 'AC': 'AwayTeam',
+    }
+
+    def _time_safe_impute(frame, col, role_col):
+        team_prev = frame.groupby(['League', role_col])[col].transform(lambda s: s.shift(1).ffill())
+        league_running = frame.groupby('League')[col].transform(lambda s: s.shift(1).expanding().mean())
+        global_running = frame[col].shift(1).expanding().mean()
+        fixed_fallback = frame[col].median()
+
+        return (
+            frame[col]
+            .fillna(team_prev)
+            .fillna(league_running)
+            .fillna(global_running)
+            .fillna(fixed_fallback)
+            .fillna(0)
+        )
+
+    imputed_pct = {}
     for col in ['HS', 'AS', 'HST', 'AST', 'HC', 'AC']:
         if col not in df.columns:
-            df[col] = 0
+            df[col] = np.nan
         else:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        df[f'{col}_available'] = df[col].notna().astype(int)
+        imputed_pct[col] = float((~df[col].notna()).mean() * 100)
+
+        df[col] = _time_safe_impute(df, col, _ROLE_COL[col])
+
+    print("\n📉 Missing-statistic rates (time-safe imputed, no future leakage):")
+    for col, pct in imputed_pct.items():
+        print(f"  • {col}: {pct:.1f}% imputed")
+
+    load_report = {
+        'seasons_requested': seasons,
+        'loaded': loaded,
+        'failed': failed,
+    }
+
+    print("\n📊 Season load summary:")
+    for league in LEAGUES:
+        print(f"  • {league}: loaded {loaded[league]} | failed/unavailable {failed[league]}")
     
-    # Cache it
+    # Cache it (data + metadata, so a later run can validate reuse)
     joblib.dump(df, cache_file, compress=3)
+    joblib.dump({'version': CACHE_VERSION, 'seasons_requested': seasons, 'load_report': load_report}, meta_file)
     print(f"\n💾 Cached to {cache_file}")
     
-    return df
-
-# ============================================================================
-# STEP 2: ELO RATINGS
-# ============================================================================
+    return df, load_report
 
 def compute_elo_ratings(df, k=20, base_rating=1500):
-    """Compute ELO ratings with proper time ordering."""
+    """
+    Compute ELO ratings with proper time ordering.
+
+    FIX (cross-league contamination): ratings were previously keyed only by
+    team name, so a name shared across leagues (or a promoted/relegated team
+    that changes competitions) would incorrectly carry its rating over from
+    an unrelated league. Ratings are now keyed by (League, Team), so each
+    league's Elo pool is fully independent, while still being computed
+    chronologically using only information available before each match.
+    """
     
     print("\n🏆 Computing ELO ratings...")
     
     df = df.sort_values(['League', 'Date']).reset_index(drop=True)
-    ratings = {}
+    ratings = {}  # key: (League, Team)
     home_elo = []
     away_elo = []
     
     for _, row in tqdm(df.iterrows(), total=len(df), desc="ELO computation"):
+        league = row['League']
         home = row['HomeTeam']
         away = row['AwayTeam']
+
+        hkey = (league, home)
+        akey = (league, away)
         
-        if home not in ratings:
-            ratings[home] = base_rating
-        if away not in ratings:
-            ratings[away] = base_rating
+        if hkey not in ratings:
+            ratings[hkey] = base_rating
+        if akey not in ratings:
+            ratings[akey] = base_rating
         
-        h_elo = ratings[home]
-        a_elo = ratings[away]
+        h_elo = ratings[hkey]
+        a_elo = ratings[akey]
         
         home_elo.append(h_elo)
         away_elo.append(a_elo)
@@ -148,14 +250,15 @@ def compute_elo_ratings(df, k=20, base_rating=1500):
         expected = 1 / (1 + 10 ** ((a_elo - h_elo) / 400))
         result = 1.0 if row['FTR'] == 'H' else (0.5 if row['FTR'] == 'D' else 0.0)
         
-        ratings[home] = h_elo + k * (result - expected)
-        ratings[away] = a_elo + k * ((1 - result) - (1 - expected))
+        ratings[hkey] = h_elo + k * (result - expected)
+        ratings[akey] = a_elo + k * ((1 - result) - (1 - expected))
     
     df['ELO_home'] = home_elo
     df['ELO_away'] = away_elo
     df['ELO_diff'] = df['ELO_home'] - df['ELO_away']
     
-    print(f"✅ ELO computed for {len(ratings)} teams")
+    n_teams_total = len(set(k[1] for k in ratings))
+    print(f"✅ ELO computed for {len(ratings)} (league, team) pairs across {n_teams_total} distinct team names, {df['League'].nunique()} leagues — no cross-league contamination")
     
     return df
 
@@ -167,12 +270,21 @@ def create_features_with_cache(df, force_refresh=False):
     """Create features with caching to avoid recomputation."""
     
     cache_file = CACHE_DIR / "features.pkl"
-    
-    if cache_file.exists() and not force_refresh:
-        print("\n📦 Loading features from cache...")
-        df, feature_cols = joblib.load(cache_file)
-        print(f"✅ Loaded {len(feature_cols)} features from cache")
-        return df, feature_cols
+    meta_file = CACHE_DIR / "features_meta.pkl"
+
+    # Version/size fingerprint so a stale (e.g. 5-season) feature cache can't
+    # silently be reused after the underlying data changed.
+    current_fingerprint = {'version': CACHE_VERSION, 'n_rows': len(df), 'seasons': sorted(df['Season'].unique().tolist())}
+
+    if cache_file.exists() and meta_file.exists() and not force_refresh:
+        cached_fp = joblib.load(meta_file)
+        if cached_fp == current_fingerprint:
+            print("\n📦 Loading features from cache (schema & data match)...")
+            df, feature_cols = joblib.load(cache_file)
+            print(f"✅ Loaded {len(feature_cols)} features from cache")
+            return df, feature_cols
+        else:
+            print("\n♻️  Feature cache is stale (underlying data changed) — recomputing...")
     
     print("\n🔧 Creating features...")
     
@@ -217,6 +329,37 @@ def create_features_with_cache(df, force_refresh=False):
     df['AC_L5'] = df.groupby(['League', 'AwayTeam'])['AC'].transform(
         lambda x: x.shift(1).rolling(5, min_periods=1).mean()
     )
+
+    # Data-availability reliability features.
+    # FIX: the raw *_available flags (0/1 for whether HS/AST/etc. was
+    # actually recorded for a given match) can't be used directly as ML
+    # features, because at prediction time for a future fixture we don't yet
+    # know whether that match's stats will be recorded — using the raw flag
+    # would work fine in training but be unconstructible at prediction time,
+    # breaking train/predict feature parity. Instead we roll each team's
+    # historical availability rate (same shift(1)+rolling pattern as every
+    # other feature here), which IS knowable in advance and lets the model
+    # learn "this team/league's rolling stats tend to be reliable vs. often
+    # imputed" as a genuine predictive signal.
+    print("  • Stats-availability reliability (rolling)...")
+    df['HS_avail_L5'] = df.groupby(['League', 'HomeTeam'])['HS_available'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df['HST_avail_L5'] = df.groupby(['League', 'HomeTeam'])['HST_available'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df['HC_avail_L5'] = df.groupby(['League', 'HomeTeam'])['HC_available'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df['AS_avail_L5'] = df.groupby(['League', 'AwayTeam'])['AS_available'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df['AST_avail_L5'] = df.groupby(['League', 'AwayTeam'])['AST_available'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df['AC_avail_L5'] = df.groupby(['League', 'AwayTeam'])['AC_available'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
     
     # Form
     print("  • Form features...")
@@ -250,11 +393,12 @@ def create_features_with_cache(df, force_refresh=False):
     
     df = df.dropna(subset=feature_cols)
     
-    # Cache it
+    # Cache it (+ fingerprint so it auto-invalidates on future data/schema changes)
     joblib.dump((df, feature_cols), cache_file, compress=3)
+    joblib.dump(current_fingerprint, meta_file)
     print(f"\n💾 Cached features to {cache_file}")
     
-    print(f"\n✅ Created {len(feature_cols)} features")
+    print(f"\n✅ Created {len(feature_cols)} features (includes {sum('avail_L5' in c for c in feature_cols)} availability-reliability features)")
     print(f"📊 {len(df):,} matches after engineering")
     
     return df, feature_cols
@@ -288,7 +432,34 @@ def train_ml_model(df, feature_cols):
     )
     
     tscv = TimeSeriesSplit(n_splits=3)
-    
+
+    # FIX: report genuine walk-forward (out-of-fold) log-loss BEFORE fitting
+    # the final model on all data. Evaluating predict_proba on the same rows
+    # the model was fit/calibrated on (as before) measures memorization, not
+    # predictive skill, and materially overstates model quality.
+    #
+    # NOTE: sklearn's cross_val_predict requires every sample to appear in
+    # exactly one test fold, which TimeSeriesSplit does not guarantee (the
+    # first training block is never used as a test fold, by design — there's
+    # no "past" to train on for it). So we manually walk the folds and only
+    # score the rows that were genuinely held out at some point.
+    print("  • Computing out-of-fold log-loss (walk-forward, no leakage)...")
+    oof_proba = np.full((len(y), 3), np.nan)
+    scored_mask = np.zeros(len(y), dtype=bool)
+
+    for train_idx, test_idx in tscv.split(X):
+        fold_model = CalibratedClassifierCV(base_model, method='isotonic', cv=3)
+        fold_model.fit(X[train_idx], y[train_idx])
+        oof_proba[test_idx] = fold_model.predict_proba(X[test_idx])
+        scored_mask[test_idx] = True
+
+    if scored_mask.sum() > 0:
+        oof_ll = log_loss(y[scored_mask], oof_proba[scored_mask])
+        print(f"  • Out-of-fold (walk-forward) log-loss: {oof_ll:.4f} on {scored_mask.sum()}/{len(y)} rows  <-- trust this number")
+    else:
+        oof_ll = None
+        print("  • Not enough data for walk-forward validation — skipping OOF log-loss")
+
     final_model = CalibratedClassifierCV(base_model, method='isotonic', cv=tscv)
     final_model.fit(X, y)
     
@@ -296,8 +467,11 @@ def train_ml_model(df, feature_cols):
     ll = log_loss(y, y_pred)
     
     print(f"✅ ML Model trained")
-    print(f"  • Log-loss: {ll:.4f}")
-    
+    print(f"  • In-sample log-loss: {ll:.4f}  (optimistic — do not use to judge live performance)")
+    print(f"  • Out-of-fold log-loss: {f'{oof_ll:.4f}' if oof_ll is not None else 'n/a'}  (realistic estimate of live performance)")
+
+    final_model.oof_log_loss_ = oof_ll  # stash for reporting elsewhere (e.g. app "Guide" tab)
+
     return final_model
 
 # ============================================================================
@@ -495,29 +669,72 @@ def create_team_mappings(df):
     return team_mapping, all_teams
 
 # ============================================================================
+# STEP 6b: CURRENT-SEASON TEAM UNIVERSE (distinct from historical all_teams)
+# ============================================================================
+
+def get_current_season_teams(df, load_report):
+    """
+    Determine which teams are ACTIVE in the current/latest loaded season per
+    league, separately from `all_teams` (which is every team across all
+    historical seasons and is what the trained model actually knows about).
+
+    This distinction matters because of promotion/relegation and division
+    changes: a team can be historically valid (present in training data,
+    used for its Elo/rolling stats) without being a current top-flight team,
+    and vice-versa for a newly promoted side with no top-flight history yet.
+
+    Returns:
+        current_teams_by_league: {league: [teams in that league's latest
+            successfully-loaded season]}
+        latest_season_by_league: {league: season string used as "current"}
+    """
+
+    current_teams_by_league = {}
+    latest_season_by_league = {}
+
+    for league in df['League'].unique():
+        loaded_seasons = load_report['loaded'].get(league, [])
+        if not loaded_seasons:
+            current_teams_by_league[league] = []
+            latest_season_by_league[league] = None
+            continue
+
+        latest_season = loaded_seasons[-1]  # seasons list is chronological ascending
+        subset = df[(df['League'] == league) & (df['Season'] == latest_season)]
+        teams = sorted(set(subset['HomeTeam'].unique()) | set(subset['AwayTeam'].unique()))
+
+        current_teams_by_league[league] = teams
+        latest_season_by_league[league] = latest_season
+
+    return current_teams_by_league, latest_season_by_league
+
+# ============================================================================
 # MAIN TRAINING FUNCTION
 # ============================================================================
 
-def main(force_refresh=False):
+def main(force_refresh=False, n_seasons=10):
     """Main training pipeline with proper caching."""
     
-    # Load data
-    df = load_data_with_cache(force_refresh=force_refresh)
+    # Load data (now returns a load_report: which seasons succeeded/failed per league)
+    df, load_report = load_data_with_cache(force_refresh=force_refresh, n_seasons=n_seasons)
     
-    # ELO
+    # ELO (now scoped per (League, Team) — no cross-league contamination)
     df = compute_elo_ratings(df)
     
-    # Features
+    # Features (now includes time-safe imputation + availability-reliability features)
     df, feature_cols = create_features_with_cache(df, force_refresh=force_refresh)
     
-    # Train ML
+    # Train ML (now reports genuine out-of-fold log-loss)
     final_model = train_ml_model(df, feature_cols)
     
     # Train DC
     dc_models = train_dixon_coles(df)
     
-    # Team mappings
+    # Team mappings — historical universe (everything the trained model knows about)
     team_mapping, all_teams = create_team_mappings(df)
+
+    # Current-season team universe — distinct from historical `all_teams`
+    current_teams_by_league, latest_season_by_league = get_current_season_teams(df, load_report)
     
     # Save models
     print("\n💾 Saving models...")
@@ -540,19 +757,46 @@ def main(force_refresh=False):
     # Save all teams for validation
     joblib.dump(all_teams, 'all_teams.pkl')
     print("  ✅ all_teams.pkl")
+
+    # Save current-season team metadata (new artifact)
+    current_teams_meta = {
+        'current_teams_by_league': current_teams_by_league,
+        'latest_season_by_league': latest_season_by_league,
+        'seasons_requested': load_report['seasons_requested'],
+        'seasons_loaded': load_report['loaded'],
+        'seasons_failed': load_report['failed'],
+    }
+    joblib.dump(current_teams_meta, 'current_teams.pkl')
+    print("  ✅ current_teams.pkl")
     
     # Summary
     print("\n" + "="*80)
     print("🎉 TRAINING COMPLETE!")
     print("="*80)
+
+    oof_ll = getattr(final_model, 'oof_log_loss_', None)
+    in_sample_ll = log_loss(df['Outcome'], final_model.predict_proba(df[feature_cols].fillna(0)))
+
     print(f"""
 📊 SUMMARY:
-  • Matches: {len(df):,}
-  • Teams: {len(all_teams)}
+  • Seasons requested: {n_seasons} ({load_report['seasons_requested'][0]} .. {load_report['seasons_requested'][-1]})
+  • Matches (final training set): {len(df):,}
+  • Historical teams (all_teams): {len(all_teams)}
   • Features: {len(feature_cols)}
   • Leagues: {len(dc_models)}
-  • Log-loss: {log_loss(df['Outcome'], final_model.predict_proba(df[feature_cols].fillna(0))):.4f}
+  • In-sample log-loss: {in_sample_ll:.4f}  (optimistic, do not trust for live performance)
+  • Out-of-fold log-loss: {f'{oof_ll:.4f}' if oof_ll is not None else 'n/a'}  (realistic estimate)
 
+📅 SEASON LOAD REPORT (per league):""")
+    for league in load_report['loaded']:
+        loaded = load_report['loaded'][league]
+        failed = load_report['failed'][league]
+        latest = latest_season_by_league.get(league)
+        n_current_teams = len(current_teams_by_league.get(league, []))
+        print(f"  • {league}: {len(loaded)}/{n_seasons} seasons loaded, {len(failed)} unavailable "
+              f"({failed if failed else 'none'}) | current season: {latest} | current teams: {n_current_teams}")
+
+    print(f"""
 💾 FILES SAVED:
   • final_model.pkl
   • dc_models.pkl
@@ -560,10 +804,11 @@ def main(force_refresh=False):
   • processed_data.pkl
   • team_mapping.pkl
   • all_teams.pkl
+  • current_teams.pkl
 
-📦 CACHED:
-  • cache/raw_data.pkl
-  • cache/features.pkl
+📦 CACHED (auto-invalidates if seasons/schema change):
+  • cache/raw_data.pkl (+ raw_data_meta.pkl)
+  • cache/features.pkl (+ features_meta.pkl)
 
 ✅ Ready for deployment!
 """)
@@ -571,4 +816,8 @@ def main(force_refresh=False):
 if __name__ == "__main__":
     import sys
     force = "--force" in sys.argv
-    main(force_refresh=force)
+    n_seasons = 10
+    for arg in sys.argv:
+        if arg.startswith("--seasons="):
+            n_seasons = int(arg.split("=")[1])
+    main(force_refresh=force, n_seasons=n_seasons)
