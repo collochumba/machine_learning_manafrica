@@ -98,7 +98,14 @@ class DixonColesTimeDecay:
             return -ll
 
         x0 = np.concatenate([np.zeros(n), np.zeros(n), [0.25], [0]])
-        bounds = [(-3,3)]*(2*n) + [(0,0.5), (-0.1,0.1)]
+        # FIX: bounds were (0, 0.5) for home advantage, which structurally
+        # prevents the model from ever expressing a neutral or negative
+        # home advantage (a real phenomenon — e.g. some leagues/periods,
+        # or specific team pairings, have shown near-zero or slightly
+        # negative home advantage). Similarly widened rho slightly beyond
+        # the very tight (-0.1, 0.1) to give the low-score correction a
+        # bit more room while still keeping it in a sane, well-studied range.
+        bounds = [(-3, 3)] * (2 * n) + [(-0.3, 0.8), (-0.15, 0.15)]
 
         res = minimize(nll, x0, method='L-BFGS-B', bounds=bounds, options={'maxiter': 200})
 

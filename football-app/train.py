@@ -58,9 +58,14 @@ def get_last_n_seasons(n=10):
 # STEP 1: DATA LOADING WITH CACHING
 # ============================================================================
 
-CACHE_VERSION = "v2-10season-availflags"  # bump this whenever the schema of
-                                            # the cached raw/feature data changes,
-                                            # so stale caches auto-invalidate.
+CACHE_VERSION = "v3-formppg-allowlist-burnin-imputation"  # bump this whenever
+                                            # the schema of the cached raw/
+                                            # feature data changes (new/renamed
+                                            # columns, different imputation or
+                                            # feature-selection logic, etc.),
+                                            # so stale caches auto-invalidate
+                                            # instead of silently being reused
+                                            # with the old column semantics.
 
 
 def load_data_with_cache(force_refresh=False, n_seasons=10):
@@ -154,18 +159,30 @@ def load_data_with_cache(force_refresh=False, n_seasons=10):
     #      (HomeTeam for H* columns, AwayTeam for A* columns)
     #   2. The league's running (expanding) historical mean up to that point
     #   3. The global running (expanding) historical mean up to that point
-    #   4. A fixed neutral fallback (overall median) — only ever hit for the
-    #      first few rows of the whole dataset, where no prior history exists
+    #   4. A FIXED neutral fallback, computed ONCE from only the earliest
+    #      chronological slice of the dataset (a "burn-in" baseline) —
+    #      NOT from the full dataset. Using `frame[col].median()` over the
+    #      whole dataset would leak future information into the very
+    #      earliest rows, which is exactly the kind of leakage step 1-3
+    #      are designed to avoid; the fallback must not be exempt from that
+    #      same rule. Only ever hit for the first few rows of the whole
+    #      dataset, where no prior history exists yet at all.
     _ROLE_COL = {
         'HS': 'HomeTeam', 'HST': 'HomeTeam', 'HC': 'HomeTeam',
         'AS': 'AwayTeam', 'AST': 'AwayTeam', 'AC': 'AwayTeam',
     }
+    _BURN_IN_MIN_ROWS = 20
+    _BURN_IN_FRACTION = 0.05
 
     def _time_safe_impute(frame, col, role_col):
         team_prev = frame.groupby(['League', role_col])[col].transform(lambda s: s.shift(1).ffill())
         league_running = frame.groupby('League')[col].transform(lambda s: s.shift(1).expanding().mean())
         global_running = frame[col].shift(1).expanding().mean()
-        fixed_fallback = frame[col].median()
+
+        burn_in_n = max(_BURN_IN_MIN_ROWS, int(len(frame) * _BURN_IN_FRACTION))
+        fixed_fallback = frame[col].iloc[:burn_in_n].median()
+        if pd.isna(fixed_fallback):
+            fixed_fallback = 0.0
 
         return (
             frame[col]
@@ -361,16 +378,19 @@ def create_features_with_cache(df, force_refresh=False):
         lambda x: x.shift(1).rolling(5, min_periods=1).mean()
     )
     
-    # Form
-    print("  • Form features...")
+    # Form (points-per-game over last 5, NOT a raw 0-15 sum — a sum
+    # conflates "played more games" with "played well", and isn't
+    # comparable across teams with different numbers of recent fixtures.
+    # Named *PPG explicitly so the scale is unambiguous.)
+    print("  • Form features (PPG)...")
     df['HP'] = (df['FTR'] == 'H') * 3 + (df['FTR'] == 'D') * 1
     df['AP'] = (df['FTR'] == 'A') * 3 + (df['FTR'] == 'D') * 1
     
-    df['HForm'] = df.groupby(['League', 'HomeTeam'])['HP'].transform(
-        lambda x: x.shift(1).rolling(5, min_periods=1).sum()
+    df['HFormPPG'] = df.groupby(['League', 'HomeTeam'])['HP'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
     )
-    df['AForm'] = df.groupby(['League', 'AwayTeam'])['AP'].transform(
-        lambda x: x.shift(1).rolling(5, min_periods=1).sum()
+    df['AFormPPG'] = df.groupby(['League', 'AwayTeam'])['AP'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
     )
     
     # Matchup differentials
@@ -386,10 +406,44 @@ def create_features_with_cache(df, force_refresh=False):
     league_dummies = pd.get_dummies(df['League'], prefix='Lg')
     df = pd.concat([df, league_dummies], axis=1)
     
-    feature_cols = [
-        c for c in df.columns 
-        if ('_L' in c or 'Form' in c or 'Diff' in c or 'ELO' in c or 'Lg_' in c)
+    # Explicit feature allowlist.
+    # FIX: the previous approach selected feature_cols by substring pattern
+    # ('_L' in c, 'Form' in c, etc.), which meant any future column that
+    # happened to match one of those substrings would silently become a
+    # model input with no review. This is now an explicit, named list —
+    # adding a new engineered column requires deliberately adding it here.
+    _ROLLING_WINDOWS_GOALS = [5, 10]
+    feature_cols = []
+
+    for window in _ROLLING_WINDOWS_GOALS:
+        feature_cols += [f'HGS_L{window}', f'HGC_L{window}', f'AGS_L{window}', f'AGC_L{window}']
+
+    feature_cols += ['HS_L5', 'AS_L5', 'HST_L5', 'AST_L5', 'HC_L5', 'AC_L5']
+
+    feature_cols += [
+        'HS_avail_L5', 'AS_avail_L5',
+        'HST_avail_L5', 'AST_avail_L5',
+        'HC_avail_L5', 'AC_avail_L5',
     ]
+
+    feature_cols += ['HFormPPG', 'AFormPPG']
+
+    feature_cols += ['AttackDiff', 'DefenseDiff', 'ShotDiff', 'ShotTargetDiff', 'CornerDiff']
+
+    feature_cols += ['ELO_home', 'ELO_away', 'ELO_diff']
+
+    # League dummies are the one dynamic part — the set of leagues is a
+    # deliberate runtime choice (LEAGUES dict above), not an accidental
+    # pattern match, so it's fine for this part to stay derived from data.
+    feature_cols += sorted(c for c in df.columns if c.startswith('Lg_'))
+
+    missing_expected = [c for c in feature_cols if c not in df.columns]
+    if missing_expected:
+        raise RuntimeError(
+            f"Expected feature columns were not created by the feature "
+            f"engineering steps above: {missing_expected}. This means a "
+            f"column was renamed/removed without updating the allowlist."
+        )
     
     df = df.dropna(subset=feature_cols)
     
@@ -433,32 +487,78 @@ def train_ml_model(df, feature_cols):
     
     tscv = TimeSeriesSplit(n_splits=3)
 
-    # FIX: report genuine walk-forward (out-of-fold) log-loss BEFORE fitting
-    # the final model on all data. Evaluating predict_proba on the same rows
-    # the model was fit/calibrated on (as before) measures memorization, not
-    # predictive skill, and materially overstates model quality.
+    # Walk-forward (out-of-fold) evaluation. This is now the PRIMARY,
+    # headline performance metric — not the in-sample number computed later.
+    #
+    # FIX (de-nested calibration): the previous version ran
+    # CalibratedClassifierCV(base_model, cv=3) — a second, independent CV —
+    # INSIDE each outer walk-forward fold. That's cross-validation nested
+    # inside cross-validation: not a leakage bug, but it muddies what the
+    # OOF number represents and multiplies training cost for no benefit.
+    # Replaced with a single chronological split per fold: fit the base
+    # model on the first ~80% of that fold's training block, calibrate on
+    # the remaining ~20% (a plain holdout, cv='prefit'), then score the
+    # fold's test block. One level of validation, cleanly interpretable.
     #
     # NOTE: sklearn's cross_val_predict requires every sample to appear in
     # exactly one test fold, which TimeSeriesSplit does not guarantee (the
     # first training block is never used as a test fold, by design — there's
     # no "past" to train on for it). So we manually walk the folds and only
     # score the rows that were genuinely held out at some point.
-    print("  • Computing out-of-fold log-loss (walk-forward, no leakage)...")
+    from sklearn.base import clone
+
+    def _fit_calibrated_on_prefit(fitted_estimator, X_calib, y_calib):
+        """
+        Wrap an ALREADY-FITTED estimator in CalibratedClassifierCV for a
+        holdout-based calibration fit, compatible across sklearn versions:
+        sklearn >= 1.6 removed the cv='prefit' string in favor of wrapping
+        the fitted estimator in sklearn.frozen.FrozenEstimator; older
+        versions don't have FrozenEstimator at all. Try the modern path
+        first, fall back to the legacy string for older installs.
+        """
+        try:
+            from sklearn.frozen import FrozenEstimator
+            calib = CalibratedClassifierCV(FrozenEstimator(fitted_estimator), method='isotonic')
+        except ImportError:
+            calib = CalibratedClassifierCV(fitted_estimator, method='isotonic', cv='prefit')
+        calib.fit(X_calib, y_calib)
+        return calib
+
+    print("  • Computing out-of-fold performance (walk-forward, single-level calibration)...")
     oof_proba = np.full((len(y), 3), np.nan)
     scored_mask = np.zeros(len(y), dtype=bool)
 
     for train_idx, test_idx in tscv.split(X):
-        fold_model = CalibratedClassifierCV(base_model, method='isotonic', cv=3)
-        fold_model.fit(X[train_idx], y[train_idx])
+        split_point = int(len(train_idx) * 0.8)
+        fit_idx, calib_idx = train_idx[:split_point], train_idx[split_point:]
+        if len(calib_idx) < 10:
+            # Fold's training block too small to hold out a calibration
+            # slice meaningfully — fit and calibrate on the same data for
+            # this fold only (degrades gracefully; only affects early folds).
+            fit_idx, calib_idx = train_idx, train_idx
+
+        fold_base = clone(base_model)
+        fold_base.fit(X[fit_idx], y[fit_idx])
+        fold_model = _fit_calibrated_on_prefit(fold_base, X[calib_idx], y[calib_idx])
+
         oof_proba[test_idx] = fold_model.predict_proba(X[test_idx])
         scored_mask[test_idx] = True
 
     if scored_mask.sum() > 0:
-        oof_ll = log_loss(y[scored_mask], oof_proba[scored_mask])
-        print(f"  • Out-of-fold (walk-forward) log-loss: {oof_ll:.4f} on {scored_mask.sum()}/{len(y)} rows  <-- trust this number")
+        y_scored = y[scored_mask]
+        p_scored = oof_proba[scored_mask]
+
+        oof_ll = float(log_loss(y_scored, p_scored))
+        oof_acc = float((p_scored.argmax(axis=1) == y_scored).mean())
+        y_onehot = np.eye(3)[y_scored]
+        oof_brier = float(np.mean(np.sum((p_scored - y_onehot) ** 2, axis=1)))
+
+        print(f"  • Walk-forward log-loss:  {oof_ll:.4f}  ({scored_mask.sum()}/{len(y)} rows)  <-- PRIMARY METRIC")
+        print(f"  • Walk-forward accuracy:  {oof_acc:.4f}")
+        print(f"  • Walk-forward Brier:     {oof_brier:.4f}")
     else:
-        oof_ll = None
-        print("  • Not enough data for walk-forward validation — skipping OOF log-loss")
+        oof_ll = oof_acc = oof_brier = None
+        print("  • Not enough data for walk-forward validation — skipping OOF metrics")
 
     final_model = CalibratedClassifierCV(base_model, method='isotonic', cv=tscv)
     final_model.fit(X, y)
@@ -467,10 +567,14 @@ def train_ml_model(df, feature_cols):
     ll = log_loss(y, y_pred)
     
     print(f"✅ ML Model trained")
-    print(f"  • In-sample log-loss: {ll:.4f}  (optimistic — do not use to judge live performance)")
-    print(f"  • Out-of-fold log-loss: {f'{oof_ll:.4f}' if oof_ll is not None else 'n/a'}  (realistic estimate of live performance)")
+    print(f"  • In-sample log-loss:     {ll:.4f}  (diagnostic only — DO NOT use to judge live performance)")
+    print(f"  • Walk-forward log-loss:  {f'{oof_ll:.4f}' if oof_ll is not None else 'n/a'}  (this is the number that matters)")
 
-    final_model.oof_log_loss_ = oof_ll  # stash for reporting elsewhere (e.g. app "Guide" tab)
+    # Stash for reporting elsewhere (e.g. app "Guide"/"Statistics" tab)
+    final_model.oof_log_loss_ = oof_ll
+    final_model.oof_accuracy_ = oof_acc
+    final_model.oof_brier_ = oof_brier
+    final_model.in_sample_log_loss_ = ll
 
     return final_model
 
@@ -672,7 +776,7 @@ def create_team_mappings(df):
 # STEP 6b: CURRENT-SEASON TEAM UNIVERSE (distinct from historical all_teams)
 # ============================================================================
 
-def get_current_season_teams(df, load_report):
+def get_current_season_teams(df, load_report, min_matches_for_current=100):
     """
     Determine which teams are ACTIVE in the current/latest loaded season per
     league, separately from `all_teams` (which is every team across all
@@ -683,10 +787,29 @@ def get_current_season_teams(df, load_report):
     used for its Elo/rolling stats) without being a current top-flight team,
     and vice-versa for a newly promoted side with no top-flight history yet.
 
+    FIX: originally this just took `loaded_seasons[-1]` unconditionally.
+    That's wrong early in a season — e.g. a season just 5 matches old
+    produces a "current teams" list of ~6 teams instead of ~20, because
+    most teams simply haven't played yet. Now it walks backwards from the
+    most recent loaded season and picks the first one with at least
+    `min_matches_for_current` matches, which is a reasonable proxy for "a
+    real chunk of the season has actually been played, most/all teams have
+    appeared." A newly-started season is still recorded in
+    `latest_season_by_league` / `partial_season_by_league` for visibility,
+    it's just not the one used to build the team list.
+
+    Args:
+        min_matches_for_current: minimum matches a season needs before its
+            team list is trusted as "the current season's teams". 100 is a
+            deliberately conservative threshold — a 20-team league plays 190
+            matches in a full season, so 100 means roughly half the season
+            has been played, which is normally enough for every team to have
+            appeared at least a few times.
+
     Returns:
-        current_teams_by_league: {league: [teams in that league's latest
-            successfully-loaded season]}
-        latest_season_by_league: {league: season string used as "current"}
+        current_teams_by_league: {league: [teams from the most recent
+            loaded season with enough matches played]}
+        latest_season_by_league: {league: season string actually used}
     """
 
     current_teams_by_league = {}
@@ -699,12 +822,36 @@ def get_current_season_teams(df, load_report):
             latest_season_by_league[league] = None
             continue
 
-        latest_season = loaded_seasons[-1]  # seasons list is chronological ascending
-        subset = df[(df['League'] == league) & (df['Season'] == latest_season)]
+        league_df = df[df['League'] == league]
+
+        # Walk backwards (most recent first) until we find a season with
+        # enough matches played to trust its team list.
+        chosen_season = None
+        for season in reversed(loaded_seasons):
+            n_matches = (league_df['Season'] == season).sum()
+            if n_matches >= min_matches_for_current:
+                chosen_season = season
+                break
+
+        if chosen_season is None:
+            # Every loaded season (including the most recent) is below the
+            # threshold — this would only happen with very sparse data.
+            # Fall back to whichever loaded season has the most matches.
+            match_counts = {s: (league_df['Season'] == s).sum() for s in loaded_seasons}
+            chosen_season = max(match_counts, key=match_counts.get)
+            print(f"  ⚠️  {league}: no loaded season reached {min_matches_for_current} "
+                  f"matches; using {chosen_season} ({match_counts[chosen_season]} matches) as best available")
+        elif chosen_season != loaded_seasons[-1]:
+            n_latest = (league_df['Season'] == loaded_seasons[-1]).sum()
+            print(f"  ℹ️  {league}: latest loaded season {loaded_seasons[-1]} only has "
+                  f"{n_latest} matches so far (< {min_matches_for_current}) — using "
+                  f"{chosen_season} for current-team list instead")
+
+        subset = league_df[league_df['Season'] == chosen_season]
         teams = sorted(set(subset['HomeTeam'].unique()) | set(subset['AwayTeam'].unique()))
 
         current_teams_by_league[league] = teams
-        latest_season_by_league[league] = latest_season
+        latest_season_by_league[league] = chosen_season
 
     return current_teams_by_league, latest_season_by_league
 

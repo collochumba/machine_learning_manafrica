@@ -72,8 +72,8 @@ def normalize_team_name(team_name, team_mapping, all_teams, league, df):
 # 'diff' columns are recomputed from the resolved home/away values rather
 # than copied from either source row, since they compare the two teams
 # directly and a copied value would reflect the wrong pairing.
-_HOME_PREFIXES = ('HGS_', 'HGC_', 'HS_', 'HST_', 'HC_', 'HForm')
-_AWAY_PREFIXES = ('AGS_', 'AGC_', 'AS_', 'AST_', 'AC_', 'AForm')
+_HOME_PREFIXES = ('HGS_', 'HGC_', 'HS_', 'HST_', 'HC_', 'HFormPPG')
+_AWAY_PREFIXES = ('AGS_', 'AGC_', 'AS_', 'AST_', 'AC_', 'AFormPPG')
 _DIFF_COLS = {
     'AttackDiff': ('HGS_L5', 'AGC_L5'),
     'DefenseDiff': ('HGC_L5', 'AGS_L5'),
@@ -107,41 +107,52 @@ def get_fixture_features(df, feature_cols, league, home, away):
 
     league_df = df[df['League'] == league].sort_values('Date')
 
+    if len(league_df) == 0:
+        raise ValueError(f"No historical data at all for league: {league}")
+
     home_rows = league_df[league_df['HomeTeam'] == home]
     away_rows = league_df[league_df['AwayTeam'] == away]
 
     missing_data_flag = False
+    home_row = None
+    away_row = None
 
-    if len(home_rows) == 0:
-        # No home-role history for this team in this league; fall back to
-        # any recent row involving them so we don't hard-crash, but flag it.
-        home_rows = league_df[
-            (league_df['HomeTeam'] == home) | (league_df['AwayTeam'] == home)
-        ]
+    if len(home_rows) > 0:
+        home_valid = home_rows.dropna(subset=[c for c in feature_cols if c.startswith(_HOME_PREFIXES) or c == 'ELO_home'])
+        home_row = home_valid.iloc[-1] if len(home_valid) > 0 else home_rows.iloc[-1]
+    else:
+        # No home-role history for this team in this league at all (e.g. a
+        # newly promoted side). FIX: we deliberately do NOT fall back to an
+        # away-role row for this team here — doing so would put away-context
+        # stats (how this team performs on the road) into home-context
+        # feature slots, which is exactly the row-mismatch bug this function
+        # exists to prevent. Instead, a league-wide baseline is used below
+        # for every home-context column, and the prediction is flagged.
         missing_data_flag = True
 
-    if len(away_rows) == 0:
-        away_rows = league_df[
-            (league_df['HomeTeam'] == away) | (league_df['AwayTeam'] == away)
-        ]
+    if len(away_rows) > 0:
+        away_valid = away_rows.dropna(subset=[c for c in feature_cols if c.startswith(_AWAY_PREFIXES) or c == 'ELO_away'])
+        away_row = away_valid.iloc[-1] if len(away_valid) > 0 else away_rows.iloc[-1]
+    else:
         missing_data_flag = True
 
-    if len(home_rows) == 0 or len(away_rows) == 0:
-        raise ValueError(f"No historical data for {home} or {away} in {league}")
-
-    home_row = home_rows.dropna(subset=[c for c in feature_cols if c.startswith(_HOME_PREFIXES) or c == 'ELO_home'])
-    home_row = home_row.iloc[-1] if len(home_row) > 0 else home_rows.iloc[-1]
-
-    away_row = away_rows.dropna(subset=[c for c in feature_cols if c.startswith(_AWAY_PREFIXES) or c == 'ELO_away'])
-    away_row = away_row.iloc[-1] if len(away_row) > 0 else away_rows.iloc[-1]
+    def _league_baseline(col):
+        """League-wide average for `col`, used only when a team has no
+        role-specific history at all. Returns NaN (not 0) if the league
+        itself has no data for this column, so downstream NaN handling
+        applies uniformly."""
+        if col not in league_df.columns:
+            return np.nan
+        val = league_df[col].mean()
+        return val if val == val else np.nan
 
     values = {}
 
     for col in feature_cols:
         if col == 'ELO_home':
-            values[col] = home_row.get('ELO_home', np.nan)
+            values[col] = home_row.get('ELO_home', np.nan) if home_row is not None else _league_baseline('ELO_home')
         elif col == 'ELO_away':
-            values[col] = away_row.get('ELO_away', np.nan)
+            values[col] = away_row.get('ELO_away', np.nan) if away_row is not None else _league_baseline('ELO_away')
         elif col == 'ELO_diff':
             continue  # recomputed below
         elif col in _DIFF_COLS:
@@ -149,12 +160,18 @@ def get_fixture_features(df, feature_cols, league, home, away):
         elif col.startswith('Lg_'):
             values[col] = 1.0 if col == f'Lg_{league}' else 0.0
         elif col.startswith(_HOME_PREFIXES):
-            values[col] = home_row.get(col, np.nan)
+            values[col] = home_row.get(col, np.nan) if home_row is not None else _league_baseline(col)
         elif col.startswith(_AWAY_PREFIXES):
-            values[col] = away_row.get(col, np.nan)
+            values[col] = away_row.get(col, np.nan) if away_row is not None else _league_baseline(col)
         else:
-            # Unrecognized column pattern: best-effort, prefer home row.
-            values[col] = home_row.get(col, away_row.get(col, np.nan))
+            # Unrecognized column pattern: best-effort, prefer home row,
+            # then away row, then league baseline.
+            if home_row is not None and col in home_row and home_row.get(col, np.nan) == home_row.get(col, np.nan):
+                values[col] = home_row.get(col)
+            elif away_row is not None and col in away_row and away_row.get(col, np.nan) == away_row.get(col, np.nan):
+                values[col] = away_row.get(col)
+            else:
+                values[col] = _league_baseline(col)
 
     # Recompute differential columns from the resolved values so they
     # actually compare `home` against `away`, not two mismatched rows.
