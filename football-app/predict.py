@@ -13,6 +13,7 @@ from models import (
     calculate_kelly_stake,
     calculate_confidence_score
 )
+from corner_model import corner_market_probabilities
 
 
 def normalize_team_name(team_name, team_mapping, all_teams, league, df):
@@ -72,15 +73,27 @@ def normalize_team_name(team_name, team_mapping, all_teams, league, df):
 # 'diff' columns are recomputed from the resolved home/away values rather
 # than copied from either source row, since they compare the two teams
 # directly and a copied value would reflect the wrong pairing.
-_HOME_PREFIXES = ('HGS_', 'HGC_', 'HS_', 'HST_', 'HC_', 'HFormPPG')
-_AWAY_PREFIXES = ('AGS_', 'AGC_', 'AS_', 'AST_', 'AC_', 'AFormPPG')
+_HOME_PREFIXES = ('HGS_', 'HGC_', 'HS_', 'HST_', 'HC_', 'HFormPPG', 'HSC_', 'HSTC_', 'HSTPct_', 'HF_', 'HY_', 'HR_', 'HCardPts_')
+_AWAY_PREFIXES = ('AGS_', 'AGC_', 'AS_', 'AST_', 'AC_', 'AFormPPG', 'ASC_', 'ASTC_', 'ASTPct_', 'AF_', 'AY_', 'AR_', 'ACardPts_')
 _DIFF_COLS = {
     'AttackDiff': ('HGS_L5', 'AGC_L5'),
     'DefenseDiff': ('HGC_L5', 'AGS_L5'),
     'ShotDiff': ('HS_L5', 'AS_L5'),
     'ShotTargetDiff': ('HST_L5', 'AST_L5'),
     'CornerDiff': ('HC_L5', 'AC_L5'),
+    'ShotConcededDiff': ('HSC_L5', 'ASC_L5'),
+    'FoulDiff': ('HF_L5', 'AF_L5'),
+    'CardPtsDiff': ('HCardPts_L5', 'ACardPts_L5'),
 }
+# Match-level (not team-role-specific) columns. The referee of a FUTURE
+# fixture is never known at prediction time (football-data.co.uk's
+# fixtures.csv doesn't carry it), so these always fall back to the
+# league-wide historical baseline rather than being copied from either
+# team's most recent row — that's the "clearly defined league-level
+# fallback" the referee-feature spec requires, applied unconditionally
+# at prediction time since the alternative (a specific referee) is simply
+# unavailable pre-match.
+_LEAGUE_BASELINE_ONLY_COLS = ('RefFouls_hist', 'RefCards_hist')
 
 
 def get_fixture_features(df, feature_cols, league, home, away):
@@ -159,6 +172,8 @@ def get_fixture_features(df, feature_cols, league, home, away):
             continue  # recomputed below
         elif col.startswith('Lg_'):
             values[col] = 1.0 if col == f'Lg_{league}' else 0.0
+        elif col in _LEAGUE_BASELINE_ONLY_COLS:
+            values[col] = _league_baseline(col)
         elif col.startswith(_HOME_PREFIXES):
             values[col] = home_row.get(col, np.nan) if home_row is not None else _league_baseline(col)
         elif col.startswith(_AWAY_PREFIXES):
@@ -321,6 +336,58 @@ def predict_with_fallback(
     if 'odds' in fixture:
         all_values = calculate_value(market_probs, fixture['odds'])
         result['all_bets'] = all_values
+
+    return result
+
+
+def predict_corners(league, home, away, corner_models, fixture_odds=None):
+    """
+    Predict corners for a fixture using the dedicated corner model
+    (corner_model.py), independent of the 1X2/goals pipeline.
+
+    `home`/`away` must already be the NORMALIZED (canonical) team names —
+    call this after normalize_team_name(), same as predict_with_fallback.
+
+    Returns a dict with expected corners + all corner market probabilities,
+    or a dict with 'error' if the league/teams aren't covered (e.g. a
+    newly promoted team with no corner history yet — this mirrors the 1X2
+    model's unknown-team handling: no crash, no unrelated-team
+    substitution, just a clear "unavailable" result the caller can display
+    as such).
+
+    If `fixture_odds` contains a 'Corners' odds group (mirroring the shape
+    used for the 1X2/goals odds groups), value bets are computed the same
+    no-vig way as the rest of the app; otherwise probabilities only are
+    returned, per the corner-model spec.
+    """
+
+    if corner_models is None or league not in corner_models:
+        return {'error': f'No corner model available for league: {league}'}
+
+    model = corner_models[league]
+
+    try:
+        exp_home, exp_away = model.predict(home, away)
+    except ValueError:
+        return {
+            'error': f'No corner history for {home} or {away} — likely a newly '
+                     f'promoted/unrecognized team. Corner predictions unavailable '
+                     f'for this fixture (no unrelated-team substitution performed).'
+        }
+
+    markets = corner_market_probabilities(
+        exp_home, exp_away, alpha_home=model.alpha, alpha_away=model.alpha
+    )
+
+    result = {'league': league, 'home': home, 'away': away, 'market_probs': markets}
+
+    if fixture_odds and 'Corners' in fixture_odds:
+        value_bets_raw = calculate_value(markets, {'Corners': fixture_odds['Corners']})
+        # Same "don't call it value just because model prob is high" rule as
+        # the rest of the app — reuse find_value_bets' EV/prob/odds filters.
+        result['value_bets'] = find_value_bets(value_bets_raw)
+    else:
+        result['value_bets'] = []
 
     return result
 

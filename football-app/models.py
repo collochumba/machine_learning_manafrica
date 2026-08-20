@@ -117,6 +117,7 @@ class DixonColesTimeDecay:
         self.defence = dict(zip(self.teams, deff))
         self.home_adv = params[2*n]
         self.rho = params[2*n+1]
+        self.converged_ = bool(res.success)
 
         return self
 
@@ -145,6 +146,12 @@ class DixonColesTimeDecay:
         score_matrix[0,1] *= (1 + lh*self.rho)
         score_matrix[1,0] *= (1 + la*self.rho)
         score_matrix[1,1] *= (1 - self.rho)
+
+        # Safety: with the widened rho bound, the low-score correction terms
+        # (1 - lh*la*rho) and (1 - rho) can in principle go negative for
+        # extreme lambda/rho combinations. Clip before renormalizing so no
+        # market probability derived from this matrix can be negative.
+        score_matrix = np.clip(score_matrix, 0, None)
 
         # Re-normalize: the Dixon-Coles low-score correction perturbs four
         # cells of a matrix that was already truncated at max_goals, so the

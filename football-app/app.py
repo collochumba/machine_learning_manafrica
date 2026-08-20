@@ -12,6 +12,9 @@ import plotly.express as px
 from datetime import datetime
 import os
 
+import fixture_loader
+import team_normalization
+
 # Always load files relative to this script's location,
 # regardless of where Streamlit is launched from.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20,9 +23,38 @@ def load_file(name):
     """Return absolute path to a model file in the same folder as app.py."""
     return os.path.join(BASE_DIR, name)
 
+# ============================================================================
+# FIXTURE CACHE (deliberately SEPARATE from the training cache — this only
+# ever holds the downloaded upcoming-fixtures file + a timestamp, and is
+# never read by train.py or mixed with cache/raw_data.pkl / cache/features.pkl
+# / processed_data.pkl. Loading fixtures never touches model artifacts.)
+# ============================================================================
+
+FIXTURE_CACHE_DIR = os.path.join(BASE_DIR, "cache")
+FIXTURE_CACHE_FILE = os.path.join(FIXTURE_CACHE_DIR, "latest_fixtures.pkl")
+
+
+def save_fixture_cache(raw_df, source_label):
+    os.makedirs(FIXTURE_CACHE_DIR, exist_ok=True)
+    joblib.dump({
+        'raw_df': raw_df,
+        'source': source_label,
+        'fetched_at': datetime.now(),
+    }, FIXTURE_CACHE_FILE)
+
+
+def load_fixture_cache():
+    if os.path.exists(FIXTURE_CACHE_FILE):
+        try:
+            return joblib.load(FIXTURE_CACHE_FILE)
+        except Exception:
+            return None
+    return None
+
 from models import DixonColesTimeDecay
 from predict import (
     predict_multiple_fixtures,
+    predict_corners,
     generate_summary_stats,
     rank_top_value_bets,
     simulate_bankroll
@@ -138,14 +170,23 @@ def load_all_models():
         except Exception:
             current_teams_meta = None
 
-        return final_model, dc_models, feature_cols, df, team_mapping, all_teams, current_teams_meta, None
+        # NEW (optional): dedicated corner model (Task 2). Older model
+        # artifacts won't have this either — the app still works fully for
+        # 1X2/goals/etc, it just won't show the Corner Predictions section.
+        try:
+            corner_bundle = joblib.load(load_file("corner_model.pkl"))
+            corner_models = corner_bundle.get('models')
+        except Exception:
+            corner_models = None
+
+        return final_model, dc_models, feature_cols, df, team_mapping, all_teams, current_teams_meta, corner_models, None
 
     except Exception as e:
-        return None, None, None, None, None, None, None, str(e)
+        return None, None, None, None, None, None, None, None, str(e)
 
 # Load models
 with st.spinner("🔄 Loading trained models..."):
-    final_model, dc_models, feature_cols, df, team_mapping, all_teams, current_teams_meta, error = load_all_models()
+    final_model, dc_models, feature_cols, df, team_mapping, all_teams, current_teams_meta, corner_models, error = load_all_models()
 
 # Error handling
 if error:
@@ -228,6 +269,8 @@ with st.sidebar:
     **Teams:** {df['HomeTeam'].nunique()}
     """)
 
+    st.info(f"⚽ **Corner model:** {'✅ loaded (' + str(len(corner_models)) + ' leagues)' if corner_models else '⚠️ not available — run train.py to generate corner_model.pkl'}")
+
     # NEW: training-history / current-season metadata, if available
     # (produced by the updated train.py — degrades gracefully if the model
     # artifacts predate this).
@@ -285,53 +328,222 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     st.header("📋 Input Fixtures")
 
-    st.markdown("""
-    **Format:** `League, Home Team, Away Team, Home Odds, Draw Odds, Away Odds`
-    
-    **Supported Leagues:**
-    - Premier League
-    - La Liga
-    - Serie A
-    - Bundesliga
-    - Ligue 1
-    
-    **Example:**
-    ```
-    Premier League, Arsenal, Chelsea, 2.10, 3.40, 3.50
-    La Liga, Real Madrid, Barcelona, 1.95, 3.60, 3.80
-    Serie A, Juventus, Inter, 2.30, 3.20, 3.30
-    ```
-    """)
-
-    input_text = st.text_area(
-        "Paste fixtures here (one per line):",
-        height=250,
-        placeholder="Premier League, Arsenal, Chelsea, 2.10, 3.40, 3.50\nLa Liga, Real Madrid, Barcelona, 1.95, 3.60, 3.80"
+    input_mode = st.radio(
+        "How do you want to provide fixtures?",
+        ["🔄 Load Latest Fixtures", "📝 Paste Fixtures Manually"],
+        horizontal=True,
     )
 
-    col1, col2, col3 = st.columns([1, 1, 2])
+    # These get set by whichever mode runs below; the prediction block
+    # further down triggers on (run_predictions and fixtures), regardless
+    # of which input method populated `fixtures`.
+    fixtures = []
+    run_predictions = False
 
-    with col1:
-        predict_button = st.button("🔮 PREDICT ALL", type="primary", use_container_width=True)
+    # ========================================================================
+    # MODE: LOAD LATEST FIXTURES (football-data.co.uk)
+    # ========================================================================
+    if input_mode == "🔄 Load Latest Fixtures":
 
-    with col2:
-        clear_button = st.button("🗑️ Clear", use_container_width=True)
-        if clear_button:
-            st.rerun()
+        st.caption(
+            "Source: football-data.co.uk latest fixtures. "
+            "Fixture odds reflect the latest downloadable snapshot and may "
+            "not be live bookmaker odds."
+        )
 
-    with col3:
-        if input_text:
-            lines = [l.strip() for l in input_text.split('\n') if l.strip()]
+        loader_col1, loader_col2 = st.columns(2)
+
+        with loader_col1:
+            load_clicked = st.button("🔄 Load Latest Fixtures", type="primary", use_container_width=True)
+        with loader_col2:
+            uploaded_fixture_file = st.file_uploader(
+                "...or upload a fixtures.csv / fixtures.xlsx file",
+                type=['csv', 'xlsx'],
+                key='fixture_upload',
+            )
+
+        # Handle download button
+        if load_clicked:
+            with st.spinner("Downloading latest fixtures..."):
+                content, err = fixture_loader.fetch_fixtures_bytes(fixture_loader.FIXTURES_CSV_URL)
+                if err:
+                    st.error(f"❌ {err}")
+                    st.info("You can still use **📝 Paste Fixtures Manually** instead.")
+                else:
+                    raw_df, perr = fixture_loader.parse_fixture_bytes(content, "fixtures.csv")
+                    if perr:
+                        st.error(f"❌ {perr}")
+                    else:
+                        save_fixture_cache(raw_df, "football-data.co.uk (downloaded)")
+                        st.success("✅ Latest fixtures downloaded")
+
+        # Handle file upload
+        if uploaded_fixture_file is not None:
+            content = uploaded_fixture_file.read()
+            raw_df, perr = fixture_loader.parse_fixture_bytes(content, uploaded_fixture_file.name)
+            if perr:
+                st.error(f"❌ {perr}")
+            else:
+                save_fixture_cache(raw_df, f"uploaded file: {uploaded_fixture_file.name}")
+                st.success("✅ Fixture file loaded")
+
+        cached = load_fixture_cache()
+
+        if cached is None:
+            st.info("No fixtures loaded yet. Click **🔄 Load Latest Fixtures** or upload a file above.")
+        else:
+            refresh_col1, refresh_col2 = st.columns([3, 1])
+            with refresh_col1:
+                st.caption(f"Loaded from: {cached['source']} · {cached['fetched_at'].strftime('%Y-%m-%d %H:%M:%S')}")
+            with refresh_col2:
+                if st.button("🔄 Refresh Fixtures", use_container_width=True):
+                    if os.path.exists(FIXTURE_CACHE_FILE):
+                        os.remove(FIXTURE_CACHE_FILE)
+                    st.rerun()
+
+            try:
+                supported_raw, excluded_counts, total_rows = fixture_loader.extract_supported_fixtures(cached['raw_df'])
+            except ValueError as e:
+                st.error(f"❌ {e}")
+                supported_raw, excluded_counts, total_rows = [], {}, 0
+
+            # Resolve teams against CURRENT-season teams (not historical all_teams)
+            current_teams_by_league = (current_teams_meta or {}).get('current_teams_by_league', {})
+
+            resolved_fixtures = []
+            for f in supported_raw:
+                res = team_normalization.resolve_fixture(
+                    f['league'], f['home_raw'], f['away_raw'], current_teams_by_league, all_teams
+                )
+                res['date'] = f['date']
+                res['time'] = f['time']
+                res['odds'] = f['odds']
+                resolved_fixtures.append(res)
+
+            n_valid = sum(1 for r in resolved_fixtures if r['status'] == 'valid')
+            n_review = len(resolved_fixtures) - n_valid
+            excluded_named = fixture_loader.summarize_excluded(excluded_counts)
+
+            st.markdown("#### ✅ Latest fixtures loaded")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total in file", total_rows)
+            m2.metric("Supported fixtures", len(resolved_fixtures))
+            m3.metric("Resolved", n_valid)
+            m4.metric("Needs review", n_review)
+
+            if excluded_named:
+                with st.expander(f"ℹ️ Excluded {sum(excluded_named.values())} fixtures from unsupported leagues"):
+                    for league_name, count in sorted(excluded_named.items(), key=lambda x: -x[1]):
+                        st.write(f"- {league_name}: {count}")
+
+            if n_review > 0:
+                with st.expander(f"⚠️ {n_review} fixture(s) need review", expanded=True):
+                    for r in resolved_fixtures:
+                        if r['status'] != 'needs_review':
+                            continue
+                        bad_side = 'home' if not r['home']['resolved'] else 'away'
+                        bad = r[bad_side]
+                        st.warning(
+                            f"**{r['league']}**: {r['home_raw']} vs {r['away_raw']}\n\n"
+                            f"❌ Unrecognised team: **{bad['input']}**"
+                            + (f"\n\nSuggested: **{', '.join(bad['suggestions'])}**" if bad['suggestions'] else "\n\nNo close match found.")
+                        )
+                    st.caption(
+                        "Unrecognised teams are never auto-substituted. Fix the name in "
+                        "**📝 Paste Fixtures Manually** if you want to predict this match."
+                    )
+
+            valid_fixtures = [r for r in resolved_fixtures if r['status'] == 'valid']
+
+            if valid_fixtures:
+                st.markdown("#### Select fixtures to predict")
+
+                by_league = {}
+                for r in valid_fixtures:
+                    by_league.setdefault(r['league'], []).append(r)
+
+                select_all = st.checkbox("☑ Select All", value=True, key='select_all_fixtures')
+
+                selected_keys = set()
+                for league_name in ["Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1"]:
+                    league_fixtures = by_league.get(league_name)
+                    if not league_fixtures:
+                        continue
+
+                    league_select = st.checkbox(
+                        f"Select {league_name} ({len(league_fixtures)})",
+                        value=select_all,
+                        key=f'select_league_{league_name}',
+                    )
+                    st.markdown(f"**{league_name}**")
+                    for i, r in enumerate(league_fixtures):
+                        odds_label = "odds available" if r['odds'] else "odds unavailable"
+                        label = f"{r['home']['resolved']} vs {r['away']['resolved']}  ·  {odds_label}"
+                        checked = st.checkbox(label, value=league_select, key=f'fx_{league_name}_{i}')
+                        if checked:
+                            selected_keys.add((league_name, i))
+
+                    for i, r in enumerate(league_fixtures):
+                        if (league_name, i) in selected_keys:
+                            fx = {'league': league_name, 'home': r['home']['resolved'], 'away': r['away']['resolved']}
+                            if r['odds']:
+                                fx['odds'] = r['odds']
+                            fixtures.append(fx)
+
+                predict_clicked = st.button("⚽ Predict Selected Fixtures", type="primary", use_container_width=True)
+                run_predictions = predict_clicked and bool(fixtures)
+                if predict_clicked and not fixtures:
+                    st.warning("No fixtures selected.")
+
+    # ========================================================================
+    # MODE: PASTE FIXTURES MANUALLY (unchanged backup workflow)
+    # ========================================================================
+    else:
+        st.markdown("""
+        **Format:** `League, Home Team, Away Team, Home Odds, Draw Odds, Away Odds`
+        
+        **Supported Leagues:**
+        - Premier League
+        - La Liga
+        - Serie A
+        - Bundesliga
+        - Ligue 1
+        
+        **Example:**
+        ```
+        Premier League, Arsenal, Chelsea, 2.10, 3.40, 3.50
+        La Liga, Real Madrid, Barcelona, 1.95, 3.60, 3.80
+        Serie A, Juventus, Inter, 2.30, 3.20, 3.30
+        ```
+        """)
+
+        input_text = st.text_area(
+            "Paste fixtures here (one per line):",
+            height=250,
+            placeholder="Premier League, Arsenal, Chelsea, 2.10, 3.40, 3.50\nLa Liga, Real Madrid, Barcelona, 1.95, 3.60, 3.80"
+        )
+
+        col1, col2, col3 = st.columns([1, 1, 2])
+
+        with col1:
+            predict_button = st.button("🔮 PREDICT ALL", type="primary", use_container_width=True)
+
+        with col2:
+            clear_button = st.button("🗑️ Clear", use_container_width=True)
+            if clear_button:
+                st.rerun()
+
+        with col3:
+            lines = [l.strip() for l in input_text.split('\n') if l.strip()] if input_text else []
             st.info(f"📊 {len(lines)} fixtures ready")
 
     # ============================================================================
-    # PREDICTION LOGIC
+    # MANUAL-PASTE PARSING (only runs in paste mode; appends into the shared
+    # `fixtures` list so the prediction block below is common to both modes)
     # ============================================================================
 
-    if predict_button and input_text:
+    if input_mode == "📝 Paste Fixtures Manually" and predict_button and input_text:
 
-        # Parse fixtures
-        fixtures = []
         parse_errors = []
 
         for i, line in enumerate(input_text.split('\n'), 1):
@@ -387,155 +599,227 @@ with tab1:
         if not fixtures:
             st.error("❌ No valid fixtures to predict!")
 
+        run_predictions = bool(fixtures)
+
+    # ============================================================================
+    # PREDICTION LOGIC (common to both input modes)
+    # ============================================================================
+
+    if run_predictions and fixtures:
+
+        # Generate predictions
+        with st.spinner(f"🔄 Analyzing {len(fixtures)} fixtures..."):
+
+            # FIX 1: Pass all_teams as positional argument per the required signature:
+            # predict_multiple_fixtures(fixtures, final_model, dc_models, feature_cols,
+            #                           df, team_mapping, all_teams, min_prob, min_ev)
+            try:
+                # FIX (bug #27): predict_multiple_fixtures returns
+                # (results, errors, warnings_collected) — errors second,
+                # warnings third. This used to be unpacked backwards,
+                # which silently swapped the "Warnings" and "Errors"
+                # expanders below.
+                results, prediction_errors, prediction_warnings = predict_multiple_fixtures(
+                    fixtures,
+                    final_model,
+                    dc_models,
+                    feature_cols,
+                    df,
+                    team_mapping,
+                    all_teams,
+                    min_prob=min_prob,
+                    min_ev=min_ev
+                )
+            except TypeError:
+                # Fallback: some versions may return only (results, errors)
+                raw = predict_multiple_fixtures(
+                    fixtures,
+                    final_model,
+                    dc_models,
+                    feature_cols,
+                    df,
+                    team_mapping,
+                    all_teams,
+                    min_prob=min_prob,
+                    min_ev=min_ev
+                )
+                if len(raw) == 3:
+                    results, prediction_errors, prediction_warnings = raw
+                else:
+                    results, prediction_errors = raw
+                    prediction_warnings = []
+            except Exception as e:
+                st.error(f"❌ Prediction pipeline error: {e}")
+                st.stop()
+
+        # FIX 4: Display warnings returned from prediction
+        if prediction_warnings:
+            with st.expander("⚠️ Prediction Warnings", expanded=False):
+                for warn in prediction_warnings:
+                    if isinstance(warn, dict):
+                        st.warning(f"{warn.get('fixture', 'Unknown')}: {warn.get('warning', warn)}")
+                    else:
+                        st.warning(str(warn))
+
+        # FIX 4: Display prediction errors cleanly
+        if prediction_errors:
+            with st.expander("❌ Prediction Errors", expanded=False):
+                for err in prediction_errors:
+                    if isinstance(err, dict):
+                        st.error(f"{err.get('fixture', 'Unknown')}: {err.get('error', err)}")
+                    else:
+                        st.error(str(err))
+
+        if not results:
+            st.error("❌ No successful predictions!")
+
         else:
-            # Generate predictions
-            with st.spinner(f"🔄 Analyzing {len(fixtures)} fixtures..."):
+            st.success(f"✅ Predicted {len(results)} fixtures successfully!")
 
-                # FIX 1: Pass all_teams as positional argument per the required signature:
-                # predict_multiple_fixtures(fixtures, final_model, dc_models, feature_cols,
-                #                           df, team_mapping, all_teams, min_prob, min_ev)
-                try:
-                    # FIX (bug #27): predict_multiple_fixtures returns
-                    # (results, errors, warnings_collected) — errors second,
-                    # warnings third. This used to be unpacked backwards,
-                    # which silently swapped the "Warnings" and "Errors"
-                    # expanders below.
-                    results, prediction_errors, prediction_warnings = predict_multiple_fixtures(
-                        fixtures,
-                        final_model,
-                        dc_models,
-                        feature_cols,
-                        df,
-                        team_mapping,
-                        all_teams,
-                        min_prob=min_prob,
-                        min_ev=min_ev
-                    )
-                except TypeError:
-                    # Fallback: some versions may return only (results, errors)
-                    raw = predict_multiple_fixtures(
-                        fixtures,
-                        final_model,
-                        dc_models,
-                        feature_cols,
-                        df,
-                        team_mapping,
-                        all_teams,
-                        min_prob=min_prob,
-                        min_ev=min_ev
-                    )
-                    if len(raw) == 3:
-                        results, prediction_errors, prediction_warnings = raw
+            # Corner predictions (Task 2) — computed separately from the
+            # 1X2/goals pipeline above, using each result's already-
+            # NORMALIZED home/away names so both models agree on which
+            # fixture is which. Missing corner_model.pkl (older artifact
+            # set) or an unrecognized team degrades gracefully — each
+            # result just gets result['corners'] = {'error': ...} and the
+            # UI shows an info message instead of a crash.
+            for result in results:
+                result['corners'] = predict_corners(
+                    result['league'], result['home'], result['away'], corner_models
+                )
+
+            # Store results in session state
+            st.session_state['results'] = results
+            st.session_state['summary'] = generate_summary_stats(results)
+            st.session_state['top_bets'] = rank_top_value_bets(results, n=7)
+
+            # Display predictions
+            st.markdown("---")
+            st.header("🎯 Match Predictions")
+
+            for i, result in enumerate(results, 1):
+
+                has_value = len(result['value_bets']) > 0
+                confidence = result['confidence']
+
+                # Determine styling
+                if has_value:
+                    style_class = "value-bet"
+                    icon = "✅"
+                elif confidence > 0.3:
+                    style_class = "high-confidence"
+                    icon = "🔵"
+                else:
+                    style_class = "low-confidence"
+                    icon = "⚠️"
+
+                with st.expander(
+                    f"{icon} #{i}: {result['home']} vs {result['away']} ({result['league']})",
+                    expanded=has_value
+                ):
+
+                    # Probabilities
+                    col1, col2, col3, col4 = st.columns(4)
+
+                    with col1:
+                        st.metric("Home Win", f"{result['prob_home']:.1%}")
+                    with col2:
+                        st.metric("Draw", f"{result['prob_draw']:.1%}")
+                    with col3:
+                        st.metric("Away Win", f"{result['prob_away']:.1%}")
+                    with col4:
+                        st.metric("xG", f"{result['exp_goals']:.2f}")
+
+                    # Expected goals breakdown
+                    st.markdown(f"""
+                    **Expected Goals:**
+                    - {result['home']}: {result['lambda_home']:.2f}
+                    - {result['away']}: {result['lambda_away']:.2f}
+                    """)
+
+                    # Confidence score
+                    conf_color = "🟢" if confidence > 0.3 else ("🟡" if confidence > 0.15 else "🔴")
+                    st.markdown(f"**Confidence:** {conf_color} {confidence:.1%}")
+
+                    # Value bets
+                    if result['value_bets']:
+                        st.markdown("### 💰 Value Bets")
+
+                        for j, bet in enumerate(result['value_bets'], 1):
+                            st.markdown(f"""
+                            <div class="{style_class}">
+                            <strong>#{j}: {bet['market']}</strong><br>
+                            Probability: <strong>{bet['prob']:.1%}</strong> | 
+                            Odds: <strong>{bet['odds']:.2f}</strong> | 
+                            Edge: <strong>{bet['edge']:+.2%}</strong> | 
+                            EV: <strong style="color: #28a745;">{bet['ev']:+.1%}</strong><br>
+                            Kelly Stake: <strong>{bet['kelly_stake']*100:.1f}%</strong> of bankroll
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                            # High-EV sanity warning
+                            if bet['ev'] > 0.25:
+                                st.warning(
+                                    f"⚠️ **Unusually high EV ({bet['ev']:.1%})** on {bet['market']}. "
+                                    "Verify these odds are current and from a reputable source before acting. "
+                                    "EV above 25% often indicates stale odds or model overconfidence."
+                                )
+
                     else:
-                        results, prediction_errors = raw
-                        prediction_warnings = []
-                except Exception as e:
-                    st.error(f"❌ Prediction pipeline error: {e}")
-                    st.stop()
+                        st.info("ℹ️ No value bets found with current filters")
 
-            # FIX 4: Display warnings returned from prediction
-            if prediction_warnings:
-                with st.expander("⚠️ Prediction Warnings", expanded=False):
-                    for warn in prediction_warnings:
-                        if isinstance(warn, dict):
-                            st.warning(f"{warn.get('fixture', 'Unknown')}: {warn.get('warning', warn)}")
-                        else:
-                            st.warning(str(warn))
-
-            # FIX 4: Display prediction errors cleanly
-            if prediction_errors:
-                with st.expander("❌ Prediction Errors", expanded=False):
-                    for err in prediction_errors:
-                        if isinstance(err, dict):
-                            st.error(f"{err.get('fixture', 'Unknown')}: {err.get('error', err)}")
-                        else:
-                            st.error(str(err))
-
-            if not results:
-                st.error("❌ No successful predictions!")
-
-            else:
-                st.success(f"✅ Predicted {len(results)} fixtures successfully!")
-
-                # Store results in session state
-                st.session_state['results'] = results
-                st.session_state['summary'] = generate_summary_stats(results)
-                st.session_state['top_bets'] = rank_top_value_bets(results, n=7)
-
-                # Display predictions
-                st.markdown("---")
-                st.header("🎯 Match Predictions")
-
-                for i, result in enumerate(results, 1):
-
-                    has_value = len(result['value_bets']) > 0
-                    confidence = result['confidence']
-
-                    # Determine styling
-                    if has_value:
-                        style_class = "value-bet"
-                        icon = "✅"
-                    elif confidence > 0.3:
-                        style_class = "high-confidence"
-                        icon = "🔵"
+                    # ============================================================
+                    # ⚽ CORNER PREDICTIONS (Task 2 — dedicated corner model)
+                    # ============================================================
+                    corners = result.get('corners')
+                    if corners is None:
+                        pass  # corner_model.pkl not loaded at all — say nothing per-fixture, sidebar already notes this
+                    elif 'error' in corners:
+                        st.markdown("### ⚽ Corner Predictions")
+                        st.info(f"ℹ️ {corners['error']}")
                     else:
-                        style_class = "low-confidence"
-                        icon = "⚠️"
+                        st.markdown("### ⚽ Corner Predictions")
 
-                    with st.expander(
-                        f"{icon} #{i}: {result['home']} vs {result['away']} ({result['league']})",
-                        expanded=has_value
-                    ):
+                        cm_probs = corners['market_probs']
+                        ccol1, ccol2, ccol3 = st.columns(3)
+                        with ccol1:
+                            st.metric(f"{result['home']} Corners", f"{cm_probs['exp_home_corners']:.2f}")
+                        with ccol2:
+                            st.metric(f"{result['away']} Corners", f"{cm_probs['exp_away_corners']:.2f}")
+                        with ccol3:
+                            st.metric("Total Corners", f"{cm_probs['exp_total_corners']:.2f}")
 
-                        # Probabilities
-                        col1, col2, col3, col4 = st.columns(4)
+                        ou_lines = [7.5, 8.5, 9.5, 10.5, 11.5]
+                        ou_rows = []
+                        for line in ou_lines:
+                            over_key = f'Corners Over {line}'
+                            under_key = f'Corners Under {line}'
+                            if over_key in cm_probs:
+                                ou_rows.append({
+                                    'Line': line,
+                                    'Over %': f"{cm_probs[over_key]:.1%}",
+                                    'Under %': f"{cm_probs[under_key]:.1%}",
+                                })
+                        if ou_rows:
+                            st.table(pd.DataFrame(ou_rows).set_index('Line'))
 
-                        with col1:
-                            st.metric("Home Win", f"{result['prob_home']:.1%}")
-                        with col2:
-                            st.metric("Draw", f"{result['prob_draw']:.1%}")
-                        with col3:
-                            st.metric("Away Win", f"{result['prob_away']:.1%}")
-                        with col4:
-                            st.metric("xG", f"{result['exp_goals']:.2f}")
-
-                        # Expected goals breakdown
-                        st.markdown(f"""
-                        **Expected Goals:**
-                        - {result['home']}: {result['lambda_home']:.2f}
-                        - {result['away']}: {result['lambda_away']:.2f}
-                        """)
-
-                        # Confidence score
-                        conf_color = "🟢" if confidence > 0.3 else ("🟡" if confidence > 0.15 else "🔴")
-                        st.markdown(f"**Confidence:** {conf_color} {confidence:.1%}")
-
-                        # Value bets
-                        if result['value_bets']:
-                            st.markdown("### 💰 Value Bets")
-
-                            for j, bet in enumerate(result['value_bets'], 1):
+                        # Value bets on corner markets, ONLY if corner odds
+                        # were actually supplied by the fixture source —
+                        # never inferred from a high model probability alone.
+                        if corners['value_bets']:
+                            st.markdown("#### 💰 Corner Value Bets")
+                            for j, bet in enumerate(corners['value_bets'], 1):
                                 st.markdown(f"""
                                 <div class="{style_class}">
                                 <strong>#{j}: {bet['market']}</strong><br>
-                                Probability: <strong>{bet['prob']:.1%}</strong> | 
-                                Odds: <strong>{bet['odds']:.2f}</strong> | 
-                                Edge: <strong>{bet['edge']:+.2%}</strong> | 
-                                EV: <strong style="color: #28a745;">{bet['ev']:+.1%}</strong><br>
-                                Kelly Stake: <strong>{bet['kelly_stake']*100:.1f}%</strong> of bankroll
+                                Probability: <strong>{bet['prob']:.1%}</strong> |
+                                Odds: <strong>{bet['odds']:.2f}</strong> |
+                                Edge: <strong>{bet['edge']:+.2%}</strong> |
+                                EV: <strong style="color: #28a745;">{bet['ev']:+.1%}</strong>
                                 </div>
                                 """, unsafe_allow_html=True)
 
-                                # High-EV sanity warning
-                                if bet['ev'] > 0.25:
-                                    st.warning(
-                                        f"⚠️ **Unusually high EV ({bet['ev']:.1%})** on {bet['market']}. "
-                                        "Verify these odds are current and from a reputable source before acting. "
-                                        "EV above 25% often indicates stale odds or model overconfidence."
-                                    )
 
-                        else:
-                            st.info("ℹ️ No value bets found with current filters")
 
 # ============================================================================
 # TAB 2: TOP BETS
@@ -823,7 +1107,7 @@ with tab5:
     
     ### What is XGBoost?
     
-    A machine learning model trained on 35+ features:
+    A machine learning model trained on {len(feature_cols)} features:
     - Rolling goal averages
     - Shot statistics
     - Corner statistics
@@ -891,14 +1175,14 @@ with tab5:
     - **ML Model:** XGBoost (300 trees, depth 5)
     - **Calibration:** Isotonic regression
     - **Validation:** Walk-forward time series CV
-    - **Features:** 35+ engineered features
+    - **Features:** {len(feature_cols)} engineered features
     - **Dixon-Coles:** Time-decay weighted MLE
     
     ### Training Data
     
     - **Matches:** {len(df):,}
-    - **Leagues:** 5 (top European leagues)
-    - **Seasons:** 5 (2019-2024)
+    - **Leagues:** {len(dc_models)} (top European leagues)
+    - **Seasons:** {len(current_teams_meta.get('seasons_requested', [])) if current_teams_meta else 10}
     - **Date range:** {df['Date'].min().date()} to {df['Date'].max().date()}
     
     ---

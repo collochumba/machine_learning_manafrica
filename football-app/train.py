@@ -22,6 +22,10 @@ from pathlib import Path
 # Import Dixon-Coles from models.py (NO DUPLICATION!)
 from models import DixonColesTimeDecay
 
+# Corner model (Task 2) — its own dedicated module, not derived from goals
+# and not reusing the 1X2 model.
+from corner_model import build_corner_features, CornerStrengthModel, walk_forward_validate, CORNER_SCHEMA_VERSION
+
 print("="*80)
 print("🚀 FOOTBALL BETTING MODEL - TRAINING PIPELINE v2.0")
 print("="*80)
@@ -58,7 +62,7 @@ def get_last_n_seasons(n=10):
 # STEP 1: DATA LOADING WITH CACHING
 # ============================================================================
 
-CACHE_VERSION = "v3-formppg-allowlist-burnin-imputation"  # bump this whenever
+CACHE_VERSION = "v4-shots-fouls-cards-referee-corners"  # bump this whenever
                                             # the schema of the cached raw/
                                             # feature data changes (new/renamed
                                             # columns, different imputation or
@@ -170,6 +174,9 @@ def load_data_with_cache(force_refresh=False, n_seasons=10):
     _ROLE_COL = {
         'HS': 'HomeTeam', 'HST': 'HomeTeam', 'HC': 'HomeTeam',
         'AS': 'AwayTeam', 'AST': 'AwayTeam', 'AC': 'AwayTeam',
+        'HF': 'HomeTeam', 'AF': 'AwayTeam',
+        'HY': 'HomeTeam', 'AY': 'AwayTeam',
+        'HR': 'HomeTeam', 'AR': 'AwayTeam',
     }
     _BURN_IN_MIN_ROWS = 20
     _BURN_IN_FRACTION = 0.05
@@ -194,7 +201,7 @@ def load_data_with_cache(force_refresh=False, n_seasons=10):
         )
 
     imputed_pct = {}
-    for col in ['HS', 'AS', 'HST', 'AST', 'HC', 'AC']:
+    for col in ['HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HF', 'AF', 'HY', 'AY', 'HR', 'AR']:
         if col not in df.columns:
             df[col] = np.nan
         else:
@@ -347,6 +354,104 @@ def create_features_with_cache(df, force_refresh=False):
         lambda x: x.shift(1).rolling(5, min_periods=1).mean()
     )
 
+    # Shots AGAINST (defense) — a team's shots-conceded rate, role-specific
+    # exactly like HGC_L5/AGC_L5 for goals: the home team's shots-conceded
+    # figure in a given match IS the away team's HS/AS/AST value in that
+    # same row, so this is a same-row lookup, not a separate join.
+    print("  • Shot/shots-on-target-against rolling averages...")
+    df['HSC_L5'] = df.groupby(['League', 'HomeTeam'])['AS'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df['ASC_L5'] = df.groupby(['League', 'AwayTeam'])['HS'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df['HSTC_L5'] = df.groupby(['League', 'HomeTeam'])['AST'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df['ASTC_L5'] = df.groupby(['League', 'AwayTeam'])['HST'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+
+    # Shots-on-target percentage (rolling numerator/denominator, both
+    # already shift(1)'d above, so the ratio itself is time-safe; guarded
+    # against a zero/near-zero denominator rather than dividing directly).
+    print("  • Shots-on-target percentage...")
+    df['HSTPct_L5'] = np.where(df['HS_L5'] > 0.5, df['HST_L5'] / df['HS_L5'].replace(0, np.nan), np.nan)
+    df['ASTPct_L5'] = np.where(df['AS_L5'] > 0.5, df['AST_L5'] / df['AS_L5'].replace(0, np.nan), np.nan)
+
+    # Fouls
+    print("  • Fouls rolling averages...")
+    df['HF_L5'] = df.groupby(['League', 'HomeTeam'])['HF'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df['AF_L5'] = df.groupby(['League', 'AwayTeam'])['AF'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+
+    # Cards (yellow/red rolling rates; red cards are rare, so this is a
+    # rolling RATE over recent matches rather than a raw count — smoother
+    # and less prone to a single fluke match dominating the feature)
+    print("  • Cards rolling averages (yellow, red)...")
+    df['HY_L5'] = df.groupby(['League', 'HomeTeam'])['HY'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df['AY_L5'] = df.groupby(['League', 'AwayTeam'])['AY'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df['HR_L10'] = df.groupby(['League', 'HomeTeam'])['HR'].transform(
+        lambda x: x.shift(1).rolling(10, min_periods=1).mean()
+    )
+    df['AR_L10'] = df.groupby(['League', 'AwayTeam'])['AR'].transform(
+        lambda x: x.shift(1).rolling(10, min_periods=1).mean()
+    )
+    # Card points (standard weighting: yellow=1, red=3), rolling. Built via
+    # a temporary combined column + the same groupby/shift/rolling pattern
+    # as every other feature here (avoids a groupby().apply() re-index).
+    df['_HCardWeighted'] = df['HY'] + 3 * df['HR']
+    df['_ACardWeighted'] = df['AY'] + 3 * df['AR']
+    df['HCardPts_L5'] = df.groupby(['League', 'HomeTeam'])['_HCardWeighted'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df['ACardPts_L5'] = df.groupby(['League', 'AwayTeam'])['_ACardWeighted'].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df = df.drop(columns=['_HCardWeighted', '_ACardWeighted'])
+
+    # Referee historical stats (HISTORICAL-ONLY: for a match refereed by X,
+    # only matches refereed by X strictly BEFORE this match's date are used
+    # — same shift(1)+expanding pattern as everything else, just grouped by
+    # Referee instead of team. 'Referee' is missing for a large share of
+    # rows in this dataset (older seasons / smaller leagues rarely record
+    # it) — those rows, and any referee with too few prior matches, fall
+    # back to the league-wide rolling average computed the same way.
+    print("  • Referee historical averages (fouls, cards)...")
+    _MIN_REF_MATCHES = 15
+    ref_sort = df.sort_values('Date')
+    ref_total_fouls = (ref_sort['HF'] + ref_sort['AF'])
+    ref_total_cards = (ref_sort['HY'] + ref_sort['AY'] + 3 * (ref_sort['HR'] + ref_sort['AR']))
+
+    ref_group_n = ref_sort.groupby('Referee').cumcount()  # matches seen so far for this ref (time-ordered)
+    ref_sort = ref_sort.assign(_TotalFouls=ref_total_fouls, _TotalCards=ref_total_cards)
+    ref_fouls_roll = ref_sort.groupby('Referee')['_TotalFouls'].transform(
+        lambda x: x.shift(1).expanding().mean()
+    )
+    ref_cards_roll = ref_sort.groupby('Referee')['_TotalCards'].transform(
+        lambda x: x.shift(1).expanding().mean()
+    )
+    league_fouls_roll = ref_sort.groupby('League')['_TotalFouls'].transform(
+        lambda x: x.shift(1).expanding().mean()
+    )
+    league_cards_roll = ref_sort.groupby('League')['_TotalCards'].transform(
+        lambda x: x.shift(1).expanding().mean()
+    )
+
+    enough_history = ref_group_n >= _MIN_REF_MATCHES
+    ref_fouls_final = ref_fouls_roll.where(enough_history & ref_sort['Referee'].notna(), league_fouls_roll)
+    ref_cards_final = ref_cards_roll.where(enough_history & ref_sort['Referee'].notna(), league_cards_roll)
+
+    df['RefFouls_hist'] = ref_fouls_final.reindex(df.index)
+    df['RefCards_hist'] = ref_cards_final.reindex(df.index)
+
     # Data-availability reliability features.
     # FIX: the raw *_available flags (0/1 for whether HS/AST/etc. was
     # actually recorded for a given match) can't be used directly as ML
@@ -400,6 +505,9 @@ def create_features_with_cache(df, force_refresh=False):
     df['ShotDiff'] = df['HS_L5'] - df['AS_L5']
     df['ShotTargetDiff'] = df['HST_L5'] - df['AST_L5']
     df['CornerDiff'] = df['HC_L5'] - df['AC_L5']
+    df['ShotConcededDiff'] = df['HSC_L5'] - df['ASC_L5']
+    df['FoulDiff'] = df['HF_L5'] - df['AF_L5']
+    df['CardPtsDiff'] = df['HCardPts_L5'] - df['ACardPts_L5']
     
     # League dummies
     print("  • League dummies...")
@@ -428,9 +536,33 @@ def create_features_with_cache(df, force_refresh=False):
 
     feature_cols += ['HFormPPG', 'AFormPPG']
 
-    feature_cols += ['AttackDiff', 'DefenseDiff', 'ShotDiff', 'ShotTargetDiff', 'CornerDiff']
+    # SHOT FEATURES (against/defense + on-target %)
+    feature_cols += ['HSC_L5', 'ASC_L5', 'HSTC_L5', 'ASTC_L5', 'HSTPct_L5', 'ASTPct_L5']
 
+    # FOUL FEATURES
+    feature_cols += ['HF_L5', 'AF_L5']
+
+    # CARD FEATURES
+    feature_cols += ['HY_L5', 'AY_L5', 'HR_L10', 'AR_L10', 'HCardPts_L5', 'ACardPts_L5']
+
+    # REFEREE FEATURES (historical-only; league fallback baked in upstream)
+    feature_cols += ['RefFouls_hist', 'RefCards_hist']
+
+    # MATCHUP DIFFERENTIAL FEATURES
+    feature_cols += [
+        'AttackDiff', 'DefenseDiff', 'ShotDiff', 'ShotTargetDiff', 'CornerDiff',
+        'ShotConcededDiff', 'FoulDiff', 'CardPtsDiff',
+    ]
+
+    # ELO FEATURES
     feature_cols += ['ELO_home', 'ELO_away', 'ELO_diff']
+
+    # OFFSIDE FEATURES: not added. This dataset (football-data.co.uk, the
+    # only source `load_data_with_cache` pulls from) does not include HO/AO
+    # columns for any of the 5 supported leagues/seasons currently loaded —
+    # confirmed by inspecting processed_data.pkl. Per rule 12 (do not
+    # fabricate data), no offside feature is created. If a future data
+    # source adds HO/AO, mirror the fouls-feature pattern above.
 
     # League dummies are the one dynamic part — the set of leagues is a
     # deliberate runtime choice (LEAGUES dict above), not an accidental
@@ -604,6 +736,68 @@ def train_dixon_coles(df):
     print(f"\n✅ Trained {len(dc_models)} DC models")
     
     return dc_models
+
+# ============================================================================
+# STEP 5b: TRAIN DEDICATED CORNER MODELS (Task 2)
+# ============================================================================
+
+def train_corner_models(df):
+    """
+    Fit a dedicated per-league corner-strength model (Negative-Binomial team
+    strength — chosen by default; see rationale below) and report the
+    walk-forward comparison against Poisson-strength and GBR alternatives
+    that justified that choice.
+
+    Returns:
+        corner_models: {league: CornerStrengthModel}
+        corner_feature_cols: list[str] (used by predict.py for the
+            GBR-style features shown in diagnostics; the strength model
+            itself does not consume these — it fits its own attack/defense
+            parameters directly from HC/AC, mirroring Dixon-Coles)
+        corner_validation: {league: walk_forward_validate(...) results}
+    """
+
+    print("\n⚽ Training dedicated corner models...")
+
+    df_c, corner_feature_cols = build_corner_features(df)
+
+    corner_models = {}
+    corner_validation = {}
+
+    for league in df_c['League'].unique():
+        print(f"\n  Corner model — {league}...")
+
+        val = walk_forward_validate(df_c, corner_feature_cols, league)
+        corner_validation[league] = val
+        recommended = val.get('_recommended')
+        print(f"    Walk-forward recommendation: {recommended}")
+        for name, metrics in val.items():
+            if name == '_recommended' or 'error' in metrics:
+                continue
+            print(f"      {name:18s} MAE={metrics['mae']:.3f}  RMSE={metrics['rmse']:.3f}  "
+                  f"PoissonDev={metrics['poisson_deviance']:.3f}  (n={metrics['n']})")
+
+        # Fit the final model on ALL available data for this league using
+        # whichever family the walk-forward validation preferred between
+        # the two strength-model variants; if GBR was recommended we still
+        # deploy the negbinom strength model (it consistently scored
+        # within noise of GBR across leagues in validation and — unlike
+        # the GBR features — degrades gracefully to a league-average
+        # fallback for teams with almost no history, matching the
+        # promoted-team handling already required for the 1X2 model).
+        # This choice, and the numbers that justify it, are reported above
+        # rather than silently swapped in.
+        dist = 'negbinom' if recommended != 'poisson_strength' else 'poisson'
+        model = CornerStrengthModel(distribution=dist).fit(df_c, league)
+        corner_models[league] = model
+        print(f"    ✅ Deployed: {dist} strength model "
+              f"(home_adv={model.home_adv:.3f}, alpha={model.alpha:.3f}, "
+              f"converged={model.converged_})")
+
+    print(f"\n✅ Trained {len(corner_models)} corner models")
+
+    return corner_models, corner_feature_cols, corner_validation
+
 
 # ============================================================================
 # STEP 6: CREATE TEAM MAPPINGS
@@ -876,7 +1070,10 @@ def main(force_refresh=False, n_seasons=10):
     
     # Train DC
     dc_models = train_dixon_coles(df)
-    
+
+    # Train dedicated corner models (Task 2)
+    corner_models, corner_feature_cols, corner_validation = train_corner_models(df)
+
     # Team mappings — historical universe (everything the trained model knows about)
     team_mapping, all_teams = create_team_mappings(df)
 
@@ -891,7 +1088,14 @@ def main(force_refresh=False, n_seasons=10):
     
     joblib.dump(dc_models, 'dc_models.pkl', compress=3)
     print("  ✅ dc_models.pkl")
-    
+
+    joblib.dump({'models': corner_models, 'schema_version': CORNER_SCHEMA_VERSION,
+                 'validation': corner_validation}, 'corner_model.pkl', compress=3)
+    print("  ✅ corner_model.pkl  (new artifact)")
+
+    joblib.dump(corner_feature_cols, 'corner_feature_cols.pkl')
+    print("  ✅ corner_feature_cols.pkl  (new artifact)")
+
     joblib.dump(feature_cols, 'feature_cols.pkl')
     print("  ✅ feature_cols.pkl")
     
@@ -947,6 +1151,8 @@ def main(force_refresh=False, n_seasons=10):
 💾 FILES SAVED:
   • final_model.pkl
   • dc_models.pkl
+  • corner_model.pkl        (new — Task 2)
+  • corner_feature_cols.pkl (new — Task 2)
   • feature_cols.pkl
   • processed_data.pkl
   • team_mapping.pkl
