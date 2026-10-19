@@ -1,0 +1,32 @@
+# KSG theme for Streamlit's native widgets. Keep these values in sync with theme.py (the palette lives there).
+[theme]
+base = "light"
+primaryColor = "#006B3F"
+backgroundColor = "#F7F8F5"
+secondaryBackgroundColor = "#E8F3ED"
+textColor = "#26332D"
+borderColor = "#D8E1DB"
+linkColor = "#006B3F"
+redColor = "#6B1F2B"
+greenColor = "#006B3F"
+yellowColor = "#D4AF37"
+blueColor = "#006B3F"
+orangeColor = "#D4AF37"
+violetColor = "#6B1F2B"
+redBackgroundColor = "#F4E7EA"
+greenBackgroundColor = "#E8F3ED"
+yellowBackgroundColor = "#F7F0D0"
+blueBackgroundColor = "#E8F3ED"
+dataframeHeaderBackgroundColor = "#006B3F"
+dataframeHeaderTextColor = "#FFFFFF"
+dataframeBorderColor = "#D8E1DB"
+
+[theme.sidebar]
+backgroundColor = "#004D2C"
+secondaryBackgroundColor = "#006B3F"
+textColor = "#FFFFFF"
+primaryColor = "#D4AF37"
+borderColor = "#006B3F"
+
+[client]
+toolbarMode = "minimal"

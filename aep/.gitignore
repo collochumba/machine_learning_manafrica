@@ -1,0 +1,15 @@
+.env
+*.env
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/backups/
+data/evidence/
+data/restore_tmp.db
+client_secret*.json
+*service_account*.json
+*token*.json
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
