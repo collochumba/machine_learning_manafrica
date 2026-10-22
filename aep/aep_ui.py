@@ -32,6 +32,12 @@ _CSS = f"""<style>
 .stButton>button[kind=primary]:hover{{background:{DARK_BROWN};border-color:{DARK_BROWN};color:#fff}}
 .aep-th{{background:{th.DARK_GREEN};color:#fff;padding:6px 8px;font-weight:700;font-size:.82rem;border-bottom:3px solid {th.GOLD}}}
 .aep-sec{{background:#F3E7B8;border-left:5px solid {th.GOLD};padding:.45rem .7rem;font-weight:700;color:{th.DARK_GREEN};margin:1rem 0 .3rem}}
+.aep-edit-head{{display:grid;grid-template-columns:.35fr 1.25fr 1.55fr 2.7fr 1.65fr .45fr;gap:.45rem;background:{th.DARK_GREEN};color:#fff;border-bottom:4px solid {th.GOLD};padding:.55rem .65rem;font-size:.78rem;font-weight:800;border-radius:6px 6px 0 0}}
+.aep-row-no{{padding:.45rem .1rem;color:{th.DARK_GREEN};font-weight:800;text-align:center}}
+div[data-testid="stVerticalBlockBorderWrapper"]{{border-color:#d9d3c0}}
+div[data-testid="stTextArea"] textarea{{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.35;background:#fffdf7;border-color:#d6ddda;border-radius:6px}}
+div[data-testid="stTextArea"] textarea:focus{{border-color:{th.DARK_GREEN};box-shadow:0 0 0 1px {th.DARK_GREEN}}}
+
 .aep-opt{{border:1px solid #cdd8cd;border-radius:8px;padding:.9rem 1rem;margin:.6rem 0 .3rem;min-height:130px}}
 .aep-opt.green{{background:#EAF3EA;border-color:#9DBE9D}} .aep-opt.cream{{background:#FBF1D6;border-color:{th.GOLD}}}
 .aep-opt b{{display:block;font-size:1.02rem;margin-bottom:.3rem}}
@@ -169,7 +175,7 @@ def _list(user):
     page = st.number_input("Page", 1, pages, 1, key="aep_page") if pages > 1 else 1
     start = (page - 1) * PAGE_SIZE
     widths = [.4, 1.3, 2.0, 2.3, 1.0, 1.0, 3.9]
-    for c, h in zip(st.columns(widths), ["No.", "Program Reference", "Program Title", "Main Audit Area", "Financial Year", "Status", "Actions"]):
+    for c, h in zip(st.columns(widths), ["No.", "Program Reference", "Program Title", "Audit Area Sections", "Financial Year", "Status", "Actions"]):
         c.markdown(f'<div class="aep-th">{h}</div>', unsafe_allow_html=True)
     for n, r in enumerate(rows[start:start + PAGE_SIZE], start + 1):
         c = st.columns(widths)
@@ -202,9 +208,9 @@ def _new():
         meta = _details_widgets("n_", d["meta"], d["ref"])
     o1, o2 = st.columns(2)
     o1.markdown('<div class="aep-opt green"><b>⬆ Paste from Template (Optional)</b>Paste audit program content from Word or Excel with the '
-                'columns: Audit Area, Requirements, Procedure / Test and Control, or upload an Excel, CSV or Word file.</div>', unsafe_allow_html=True)
+                'columns: Audit Area, Requirements, Procedure / Test and Observation, or upload an Excel, CSV or Word file.</div>', unsafe_allow_html=True)
     o2.markdown('<div class="aep-opt cream"><b>📄 Start with Blank Program</b>Add audit area headings and enter your own audit areas, '
-                'requirements, procedures/tests and controls manually.</div>', unsafe_allow_html=True)
+                'requirements, procedures/tests and observations manually.</div>', unsafe_allow_html=True)
     paste, blank = o1.button("Paste Template", type="primary"), o2.button("Continue to Add Audit Areas", type="primary")
     st.button("← Back to List", on_click=_go, args=("list",))
     if paste or blank:
@@ -286,7 +292,7 @@ def _editor(user, pid):
         st.error(str(e)); st.button("Back to List", on_click=_go, args=("list",)); return
     S, d = st.session_state, st.session_state.aep_draft
     st.markdown("### Audit Engagement Programs")
-    st.caption("Define the audit areas, requirements, procedures/tests and controls.")
+    st.caption("Define the audit areas, requirements, procedures/tests and observations.")
     with st.expander("Program details (click to edit)", expanded=False):
         d["meta"] = _details_widgets(f"e{pid or 0}_", d["meta"], d["ref"])
     st.markdown(_meta_table(d["ref"], d["meta"]), unsafe_allow_html=True)
@@ -296,25 +302,76 @@ def _editor(user, pid):
     for i, sec in enumerate(d["sections"]):
         k = f"aep_{nonce}_{i}"
         h1, h2, h3, h4 = st.columns([5, .6, .6, 1.6])
-        h1.markdown(f'<div class="aep-sec">{aep.letter(i)}. {_e(sec["heading"])}</div>', unsafe_allow_html=True)
+        heading = h1.text_input(
+            f"Section {aep.letter(i)} / Main Audit Area",
+            value=sec["heading"],
+            key=k + "heading",
+            label_visibility="collapsed",
+            help="Edit this heading. It will also update the Audit Area Sections shown in the programme register after saving.",
+        )
         up = h2.button("▲", key=k + "up", help="Move section up", disabled=i == 0)
         dn = h3.button("▼", key=k + "dn", help="Move section down", disabled=i == n_sec - 1)
         remove = h4.button("Remove Section", key=k + "rm")
-        df = _rows_df(sec["rows"]); df.index = range(1, len(df) + 1); df.index.name = "No."
-        ed = st.data_editor(df, num_rows="dynamic", key=k + "ed", use_container_width=True, column_order=aep.ROW_FIELDS,
-                            column_config={"area": st.column_config.TextColumn("Audit Area", width="medium"),
-                                           "requirements": st.column_config.TextColumn("Requirements", width="large"),
-                                           "procedure": st.column_config.TextColumn("Procedure / Test", width="large"),
-                                           "control": st.column_config.TextColumn("Control", width="large")})
-        rows = _df_rows(ed)
+        # Document-style editable table: each field is a wrapping text area rather than a
+        # spreadsheet cell. This is easier for long requirements, tests and field observations.
+        st.markdown(
+            """
+            <div class="aep-edit-head">
+              <div>No.</div><div>Audit Area</div><div>Requirements</div>
+              <div>Procedure / Test</div><div>Observation</div><div></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        rows, remove_row_indexes = [], []
+        for row_i, row in enumerate(sec["rows"]):
+            rkey = f"{k}_row_{row_i}"
+            with st.container(border=True):
+                st.markdown('<div class="aep-edit-row">', unsafe_allow_html=True)
+                cno, ca, cr, cp, co, cx = st.columns([0.35, 1.25, 1.55, 2.7, 1.65, 0.45])
+                cno.markdown(f'<div class="aep-row-no">{row_i + 1}</div>', unsafe_allow_html=True)
+                area_val = ca.text_area(
+                    "Audit Area", value=str(row.get("area", "")), height=105,
+                    key=f"{rkey}_area", label_visibility="collapsed",
+                    placeholder="Enter audit area...",
+                )
+                req_val = cr.text_area(
+                    "Requirements", value=str(row.get("requirements", "")), height=105,
+                    key=f"{rkey}_requirements", label_visibility="collapsed",
+                    placeholder="Enter requirements...",
+                )
+                proc_val = cp.text_area(
+                    "Procedure / Test", value=str(row.get("procedure", "")), height=105,
+                    key=f"{rkey}_procedure", label_visibility="collapsed",
+                    placeholder="Enter audit procedure or test...",
+                )
+                obs_val = co.text_area(
+                    "Observation", value=str(row.get("control", "")), height=105,
+                    key=f"{rkey}_control", label_visibility="collapsed",
+                    placeholder="Record field observation...",
+                )
+                remove_row = cx.button("✕", key=f"{rkey}_remove", help=f"Remove row {row_i + 1}")
+                if remove_row:
+                    remove_row_indexes.append(row_i)
+                rows.append({
+                    "id": row.get("id"),
+                    "area": area_val,
+                    "requirements": req_val,
+                    "procedure": proc_val,
+                    "control": obs_val,
+                })
+            st.markdown("</div>", unsafe_allow_html=True)
+        if remove_row_indexes:
+            rows = [row for idx, row in enumerate(rows) if idx not in remove_row_indexes]
         m0, m1, m2, m3, _ = st.columns([1.6, 1, .8, .8, 4])
         addrow = m0.button("＋ Add Procedure Row", key=k + "ar")
         rno = m1.number_input("Row No.", 1, max(1, len(rows)), 1, key=k + "rn", label_visibility="collapsed", help="Row number to move")
         rup = m2.button("Row ▲", key=k + "ru", disabled=len(rows) < 2)
         rdn = m3.button("Row ▼", key=k + "rd", disabled=len(rows) < 2)
-        current.append({"id": sec.get("id"), "heading": sec["heading"], "rows": rows, "remove": remove, "up": up, "dn": dn, "addrow": addrow,
+        current.append({"id": sec.get("id"), "heading": heading.strip(), "rows": rows, "remove": remove, "up": up, "dn": dn, "addrow": addrow,
+                        "remove_rows": remove_row_indexes,
                         "rmove": (int(rno) - 1, -1) if rup else ((int(rno) - 1, 1) if rdn else None)})
-    st.caption("Edit cells directly (double-click for long text). Select a row and press Delete to remove it. No. updates automatically.")
+    st.caption("Edit the text boxes directly. Long text wraps onto multiple lines. Use ✕ to remove a row; use Row ▲ / Row ▼ to reorder rows.")
     with st.container(border=True):
         a1, a2 = st.columns([4, 1])
         used = {s["heading"].lower() for s in current}
@@ -326,7 +383,7 @@ def _editor(user, pid):
     def sync():
         d["sections"] = [{"id": s["id"], "heading": s["heading"], "rows": s["rows"]} for s in current if not s["remove"]]
 
-    changed = False
+    changed = any(s.get("remove_rows") for s in current)
     for i, s in enumerate(current):
         if s["addrow"]:
             s["rows"].append({"id": None, **{f: "" for f in aep.ROW_FIELDS}}); changed = True
@@ -345,6 +402,11 @@ def _editor(user, pid):
         head = custom.strip() or choice
         if head.startswith("(all"):
             st.error("Type a custom heading, or all headings are already added.")
+        elif any(head.casefold() == str(s["heading"]).strip().casefold() for s in current):
+            st.error(
+                f"'{head}' is already a section in this AEP. Add another procedure row "
+                "under the existing section, or choose a different section heading."
+            )
         else:
             sync(); d["sections"].append({"id": None, "heading": head, "rows": []}); S["aep_nonce"] = nonce + 1; st.rerun()
 

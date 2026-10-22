@@ -91,6 +91,27 @@ def admin_panel(user):
                 except (ValueError, PermissionError) as e:
                     st.error(str(e))
 
+    # Temporary, administrator-only safeguard before the database migration.
+    with st.sidebar.expander("Database backup (Administrator)"):
+        st.warning("Download and store this backup securely. It contains confidential audit and user data.")
+        if st.button("Prepare online database backup", key="prepare_online_db_backup"):
+            try:
+                backup_path = dbm.backup_db("before-migration")
+                st.session_state["online_db_backup_bytes"] = backup_path.read_bytes()
+                st.session_state["online_db_backup_name"] = backup_path.name
+                st.success("Backup prepared. Use the download button below.")
+            except Exception as e:
+                st.error(f"Backup could not be created ({type(e).__name__}). No migration was performed.")
+        if st.session_state.get("online_db_backup_bytes") and st.session_state.get("online_db_backup_name"):
+            st.download_button(
+                "Download online database backup",
+                data=st.session_state["online_db_backup_bytes"],
+                file_name=st.session_state["online_db_backup_name"],
+                mime="application/vnd.sqlite3",
+                key="download_online_db_backup",
+                use_container_width=True,
+            )
+
 
 try:
     _boot()

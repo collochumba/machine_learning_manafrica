@@ -1,15 +1,33 @@
+
+# Secrets and credentials
 .env
-*.env
+.env.*
+!.env.example
+client_secret*.json
+client_secret.json
+token*.json
+*token*.json
+service-account*.json
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Local databases and database backups
 data/*.db
-data/*.db-wal
-data/*.db-shm
+data/*.db-*
 data/backups/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+
+# Local evidence and temporary files
 data/evidence/
 data/restore_tmp.db
-client_secret*.json
-*service_account*.json
-*token*.json
-__pycache__/
-*.pyc
-.venv/
-.pytest_cache/
+*.log
+.DS_Store

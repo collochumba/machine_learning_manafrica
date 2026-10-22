@@ -1,7 +1,7 @@
 """Audit Engagement Programs: export builders (Word, Excel, PDF, HTML). Pure functions, no Streamlit, no database.
 
 Input is the dict returned by aep.get_program(). Every export carries the same identification block and the same five
-columns in the same order: No. | Audit Area | Requirements | Procedure / Test | Control. Nothing outside the AEP scope
+columns in the same order: No. | Audit Area | Requirements | Procedure / Test | Observation. Nothing outside the AEP scope
 (no work performed, results, findings, or "Prepared by") is ever written."""
 import base64
 import html
@@ -11,7 +11,7 @@ from datetime import date
 
 import theme as th
 
-COLUMNS = ["No.", "Audit Area", "Requirements", "Procedure / Test", "Control"]
+COLUMNS = ["No.", "Audit Area", "Requirements", "Procedure / Test", "Observation"]
 FORMATS = {  # key -> (label, extension, mime)
     "docx": ("Word (.docx)", "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
     "xlsx": ("Excel (.xlsx)", "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
@@ -47,7 +47,13 @@ def filename(p, fmt, on=None):
 DOC_CSS = """
 .aep-doc{background:#fff;border:1px solid #bbb;padding:28px 34px;color:#111;font-family:Georgia,'Times New Roman',serif}
 .aep-doc h1{font-size:1.1rem;margin:.1rem 0;text-align:center;color:#111 !important}
-.aep-doc table{border-collapse:collapse;width:100%;font-size:.82rem;margin-bottom:.6rem}
+.aep-doc table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:.82rem;margin-bottom:.6rem}
+.aep-doc th:first-child,.aep-doc td:first-child{width:5%}
+.aep-doc th:nth-child(2),.aep-doc td:nth-child(2){width:14%}
+.aep-doc th:nth-child(3),.aep-doc td:nth-child(3){width:25%}
+.aep-doc th:nth-child(4),.aep-doc td:nth-child(4){width:40%}
+.aep-doc th:nth-child(5),.aep-doc td:nth-child(5){width:16%;min-width:110px}
+.aep-doc th{white-space:normal;overflow-wrap:normal;word-break:normal}
 .aep-doc th,.aep-doc td{border:1px solid #444;padding:5px 7px;vertical-align:top;text-align:left;white-space:pre-wrap;word-break:break-word}
 .aep-doc th{background:#004D2C;color:#fff}.aep-doc td.k{background:#f4f4f4;font-weight:700;width:16%}
 .aep-doc .sec{background:#F3E7B8;border:1px solid #444;padding:5px 8px;font-weight:700;margin-top:.8rem}

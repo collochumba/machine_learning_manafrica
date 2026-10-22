@@ -109,10 +109,18 @@ def _validate(data, sections):
     if d["status"] not in STATUSES:
         raise ValueError("Select a valid status.")
     clean = []
+    seen_headings = set()
     for s in sections or []:
         heading = _t(s.get("heading"))
         if not heading:
             raise ValueError("Every audit area section needs a heading.")
+        heading_key = heading.casefold()
+        if heading_key in seen_headings:
+            raise ValueError(
+                f"The section heading '{heading}' is already used in this AEP. "
+                "Add more procedure rows under the existing section instead."
+            )
+        seen_headings.add(heading_key)
         rows = [{f: _t(r.get(f)) for f in ROW_FIELDS} | {"id": r.get("id")} for r in s.get("rows", [])]
         rows = [r for r in rows if any(r[f] for f in ROW_FIELDS)]  # blank rows are dropped
         clean.append({"id": s.get("id"), "heading": heading, "rows": rows})
