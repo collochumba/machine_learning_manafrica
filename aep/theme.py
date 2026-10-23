@@ -188,8 +188,22 @@ button[data-baseweb=tab][aria-selected=true]{color:$GREEN}
 
 /* Sidebar */
 [data-testid=stSidebar]{background:$DARK_GREEN;border-right:3px solid $GOLD}
-[data-testid=stSidebar] h1,[data-testid=stSidebar] h2,[data-testid=stSidebar] h3,[data-testid=stSidebar] p,[data-testid=stSidebar] span,[data-testid=stSidebar] label{color:$WHITE !important}
-[data-testid=stSidebar] hr{border-color:rgba(255,255,255,.25);margin:.6rem 0}
+/* Sidebar shell uses white text on dark green, but expanded panels use a light surface. */
+[data-testid=stSidebar] h1,[data-testid=stSidebar] h2,[data-testid=stSidebar] h3,
+[data-testid=stSidebar] > div > div > div > div > p,
+[data-testid=stSidebar] .ksg-side-org,[data-testid=stSidebar] .ksg-side-user{color:$WHITE !important}
+[data-testid=stSidebar] hr{border-color:rgba(255,255,255,.35);margin:.6rem 0}
+/* Keep expander titles legible on the sidebar; keep expander contents dark on white. */
+[data-testid=stSidebar] [data-testid=stExpander] > details > summary{background:$WHITE !important;color:$DARK_GREEN !important;border-radius:6px}
+[data-testid=stSidebar] [data-testid=stExpander] > details > summary *{color:$DARK_GREEN !important;text-shadow:none !important}
+[data-testid=stSidebar] [data-testid=stExpander] [data-testid=stExpanderDetails],
+[data-testid=stSidebar] [data-testid=stExpander] [data-testid=stExpanderDetails] *{color:$TEXT !important;text-shadow:none !important}
+[data-testid=stSidebar] [data-testid=stExpander] [data-testid=stWidgetLabel] p,
+[data-testid=stSidebar] [data-testid=stExpander] label,
+[data-testid=stSidebar] [data-testid=stExpander] label p,
+[data-testid=stSidebar] [data-testid=stExpander] .stCaption,
+[data-testid=stSidebar] [data-testid=stExpander] [data-testid=stMarkdownContainer] p{color:$TEXT !important}
+[data-testid=stSidebar] [data-testid=stExpander] input{background:$WHITE !important;color:$TEXT !important}
 .ksg-side-org{color:$WHITE;font-weight:700;letter-spacing:.06em;font-size:.82rem;line-height:1.25;margin:.2rem 0 .1rem}
 .ksg-side-sys{color:$GOLD;font-size:.72rem;margin-bottom:.2rem}
 .ksg-side-user{color:$WHITE;font-weight:600;font-size:.95rem}
