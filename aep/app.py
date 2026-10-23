@@ -113,6 +113,22 @@ def admin_panel(user):
             )
 
 
+    with st.sidebar.expander("Import local AEP database (Administrator)"):
+        st.warning("This imports AEP programmes, sections and procedure rows only. Existing online programmes are never overwritten. Online users and stored exports are not imported.")
+        source_db = st.file_uploader("Choose your local awp.db file", type=["db", "sqlite", "sqlite3"], key="aep_local_db_upload")
+        confirm_import = st.checkbox("I have kept an unchanged copy of my local database and want to merge missing programmes.", key="aep_import_confirm")
+        if st.button("Back up online database and import programmes", key="aep_import_button", type="primary", disabled=not (source_db and confirm_import), use_container_width=True):
+            try:
+                result = __import__("aep").import_programs_from_sqlite(source_db.getvalue(), user)
+                st.success(f"Import complete: {result['imported_programs']} programme(s), {result['imported_sections']} section(s), and {result['imported_procedures']} procedure row(s) imported.")
+                st.info("A backup of the online database was created before the import. Existing online programmes with matching references were skipped.")
+                if result["skipped_references"]:
+                    st.warning("Skipped existing/invalid references: " + ", ".join(result["skipped_references"]))
+                st.caption("Online backup path: " + result["backup_path"])
+            except Exception as e:
+                st.error(f"Import failed ({type(e).__name__}): {e}. No partial transaction was committed.")
+
+
 try:
     _boot()
 except Exception as e:  # e.g. migration failure: show the clear message, never a traceback

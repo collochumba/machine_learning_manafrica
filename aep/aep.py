@@ -216,3 +216,120 @@ def count_rows(pid):
     with db.connect() as c:
         return c.execute("SELECT COUNT(*) FROM aep_procedures r JOIN aep_sections s ON s.id=r.section_id WHERE s.program_id=?",
                          (pid,)).fetchone()[0]
+
+def import_programs_from_sqlite(uploaded_bytes, user):
+    """Safely merge AEP programme content from an uploaded SQLite backup.
+
+    Existing online programmes are never overwritten. Programme references that already
+    exist are skipped. Online users, audit logs, exports and Drive records are not imported.
+    A database backup is created before the first write.
+    """
+    db._need(user, "admin")
+    import os
+    import tempfile
+    from pathlib import Path
+
+    if not uploaded_bytes:
+        raise ValueError("Choose a SQLite database file first.")
+
+    # Keep the temporary source inside the configured data area and always remove it.
+    db.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix="aep_import_source_", suffix=".db", dir=str(db.DATA_DIR))
+    os.close(fd)
+    temp_path = Path(temp_name)
+    source = None
+    try:
+        temp_path.write_bytes(uploaded_bytes)
+        try:
+            source = sqlite3.connect(f"file:{temp_path.as_posix()}?mode=ro", uri=True)
+            source.row_factory = sqlite3.Row
+            tables = {r[0] for r in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            required = {"aep_programs", "aep_sections", "aep_procedures"}
+            if not required.issubset(tables):
+                raise ValueError("This file does not contain the required AEP tables (programmes, sections and procedures).")
+            prog_cols = {r[1] for r in source.execute("PRAGMA table_info(aep_programs)")}
+            sec_cols = {r[1] for r in source.execute("PRAGMA table_info(aep_sections)")}
+            row_cols = {r[1] for r in source.execute("PRAGMA table_info(aep_procedures)")}
+            if not {"id", "program_ref", "title", "financial_year"}.issubset(prog_cols) or not {"id", "program_id", "heading"}.issubset(sec_cols) or not {"id", "section_id"}.issubset(row_cols):
+                raise ValueError("The uploaded database has an unrecognised AEP schema. No records were imported.")
+            programs = [dict(r) for r in source.execute("SELECT * FROM aep_programs ORDER BY id").fetchall()]
+            sections = [dict(r) for r in source.execute("SELECT * FROM aep_sections ORDER BY position, id").fetchall()]
+            procedures = [dict(r) for r in source.execute("SELECT * FROM aep_procedures ORDER BY position, id").fetchall()]
+        except sqlite3.DatabaseError:
+            raise ValueError("The uploaded file is not a readable SQLite database.") from None
+        finally:
+            if source is not None:
+                source.close()
+                source = None
+
+        # Back up the deployed database before any import writes.
+        backup_path = db.backup_db("pre-aep-import")
+        imported = 0
+        skipped = []
+        section_count = 0
+        procedure_count = 0
+        with db.connect(immediate=True) as target:
+            target_program_cols = {r[1] for r in target.execute("PRAGMA table_info(aep_programs)")}
+            target_section_cols = {r[1] for r in target.execute("PRAGMA table_info(aep_sections)")}
+            target_row_cols = {r[1] for r in target.execute("PRAGMA table_info(aep_procedures)")}
+            if not {"uid", "program_ref", "title", "financial_year"}.issubset(target_program_cols):
+                raise ValueError("The online database schema is not ready for AEP import. No records were imported.")
+
+            sections_by_program = {}
+            for sec in sections:
+                sections_by_program.setdefault(sec["program_id"], []).append(sec)
+            rows_by_section = {}
+            for row in procedures:
+                rows_by_section.setdefault(row["section_id"], []).append(row)
+
+            for program in programs:
+                ref = str(program.get("program_ref") or "").strip()
+                if not ref:
+                    skipped.append("A source programme with a blank reference")
+                    continue
+                if target.execute("SELECT 1 FROM aep_programs WHERE program_ref=? COLLATE NOCASE", (ref,)).fetchone():
+                    skipped.append(ref)
+                    continue
+
+                fields = ["uid", "program_ref", "title", "annual_engagement_id", "financial_year", "campus",
+                          "audit_period", "main_audit_area", "status", "version", "created_by", "created_at",
+                          "updated_at", "updated_by"]
+                values = {
+                    "uid": uuid.uuid4().hex, "program_ref": ref, "title": str(program.get("title") or "Untitled programme"),
+                    "annual_engagement_id": None, "financial_year": str(program.get("financial_year") or ""),
+                    "campus": program.get("campus") or "", "audit_period": program.get("audit_period") or "",
+                    "main_audit_area": program.get("main_audit_area") or "", "status": program.get("status") or "Draft",
+                    "version": max(1, int(program.get("version") or 1)),
+                    "created_by": program.get("created_by") or user["username"],
+                    "created_at": program.get("created_at") or db.now(), "updated_at": program.get("updated_at") or db.now(),
+                    "updated_by": program.get("updated_by") or program.get("created_by") or user["username"],
+                }
+                use_fields = [f for f in fields if f in target_program_cols]
+                cur = target.execute(f"INSERT INTO aep_programs({','.join(use_fields)}) VALUES({','.join('?' for _ in use_fields)})",
+                                     [values[f] for f in use_fields])
+                new_pid = cur.lastrowid
+                imported += 1
+                for sec in sections_by_program.get(program["id"], []):
+                    sec_fields = [f for f in ("program_id", "heading", "position") if f in target_section_cols]
+                    sec_values = {"program_id": new_pid, "heading": str(sec.get("heading") or "Imported section"), "position": int(sec.get("position") or 0)}
+                    sec_cur = target.execute(f"INSERT INTO aep_sections({','.join(sec_fields)}) VALUES({','.join('?' for _ in sec_fields)})",
+                                              [sec_values[f] for f in sec_fields])
+                    new_sid = sec_cur.lastrowid
+                    section_count += 1
+                    for row in rows_by_section.get(sec["id"], []):
+                        row_values = {"section_id": new_sid, "position": int(row.get("position") or 0),
+                                      "area": row.get("area") or "", "requirements": row.get("requirements") or "",
+                                      "procedure": row.get("procedure") or "", "control": row.get("control") or ""}
+                        row_fields = [f for f in ("section_id", "position", "area", "requirements", "procedure", "control") if f in target_row_cols]
+                        target.execute(f"INSERT INTO aep_procedures({','.join(row_fields)}) VALUES({','.join('?' for _ in row_fields)})",
+                                       [row_values[f] for f in row_fields])
+                        procedure_count += 1
+                db._log(target, user, "import_aep_program", ref)
+
+        return {"imported_programs": imported, "imported_sections": section_count,
+                "imported_procedures": procedure_count, "skipped_references": skipped, "backup_path": str(backup_path)}
+    finally:
+        if source is not None:
+            source.close()
+        temp_path.unlink(missing_ok=True)
+
