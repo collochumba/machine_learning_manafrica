@@ -752,9 +752,19 @@ def resolve_fixture(league, home_raw, away_raw, current_teams_by_league, all_tea
 # ============================================================================
 
 SUPPORTED_ARTIFACTS = [
-    "final_model.pkl", "dc_models.pkl", "corner_model.pkl", "card_model.pkl",
-    "feature_cols.pkl", "processed_data.pkl", "team_mapping.pkl", "all_teams.pkl",
+    "final_model.pkl",
+    "dc_models.pkl",
+    "corner_model.pkl",
+    "corner_feature_cols.pkl",
+    "card_model.pkl",
+    "card_feature_cols.pkl",
+    "league_config.pkl",
+    "feature_cols.pkl",
+    "processed_data.pkl",
+    "team_mapping.pkl",
+    "all_teams.pkl",
     "current_teams.pkl",
+    "training_manifest.json",
 ]
 
 

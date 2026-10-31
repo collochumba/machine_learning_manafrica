@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import poisson, nbinom
 from scipy.optimize import minimize
+from scipy.special import gammaln, digamma
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.model_selection import TimeSeriesSplit
 
@@ -152,87 +153,182 @@ class CornerStrengthModel:
         self.alpha = None  # only used for negbinom
 
     def fit(self, df, league):
-        data = df[df['League'] == league].copy()
-        data = data.sort_values('Date')
+        """Fit the corner count-strength model with an analytic gradient.
 
-        hc_col = 'HC_observed' if 'HC_observed' in data.columns else 'HC'
-        ac_col = 'AC_observed' if 'AC_observed' in data.columns else 'AC'
-        data = data.dropna(subset=[hc_col, ac_col]).copy()
+        This is mathematically equivalent to the previous Poisson /
+        Negative-Binomial likelihood, but avoids SciPy finite-difference
+        evaluations for every team parameter.
+        """
+        data = df.loc[df["League"] == league].copy()
+        data = data.sort_values("Date")
 
-        self.teams = sorted(set(data['HomeTeam']) | set(data['AwayTeam']))
+        hc_col = "HC_observed" if "HC_observed" in data.columns else "HC"
+        ac_col = "AC_observed" if "AC_observed" in data.columns else "AC"
+        required = ["HomeTeam", "AwayTeam", "Date", hc_col, ac_col]
+        if "DaysSinceMatch" not in data.columns:
+            raise ValueError("Corner model requires DaysSinceMatch.")
+        data = data.dropna(subset=required + ["DaysSinceMatch"]).copy()
+        if data.empty:
+            raise ValueError(f"No observed corner data available for {league!r}.")
+
+        self.teams = sorted(set(data["HomeTeam"]) | set(data["AwayTeam"]))
         n = len(self.teams)
-        team_to_idx = {t: i for i, t in enumerate(self.teams)}
+        if n < 2:
+            raise ValueError("Corner model requires at least two distinct teams.")
 
-        home_idx = data['HomeTeam'].map(team_to_idx).values
-        away_idx = data['AwayTeam'].map(team_to_idx).values
-        hc = data[hc_col].values
-        ac = data[ac_col].values
-        days = data['DaysSinceMatch'].values
+        team_to_idx = {team: i for i, team in enumerate(self.teams)}
+        home_idx = data["HomeTeam"].map(team_to_idx).to_numpy(dtype=np.int64)
+        away_idx = data["AwayTeam"].map(team_to_idx).to_numpy(dtype=np.int64)
+        hc = pd.to_numeric(data[hc_col], errors="coerce").to_numpy(dtype=float)
+        ac = pd.to_numeric(data[ac_col], errors="coerce").to_numpy(dtype=float)
+        days = pd.to_numeric(data["DaysSinceMatch"], errors="coerce").to_numpy(dtype=float)
+
+        if (
+            not np.isfinite(hc).all() or not np.isfinite(ac).all()
+            or np.any(hc < 0) or np.any(ac < 0)
+            or np.any(hc != np.floor(hc)) or np.any(ac != np.floor(ac))
+            or not np.isfinite(days).all()
+        ):
+            raise ValueError("Corner targets and time weights must be finite non-negative values.")
+
+        days = np.maximum(days, 0.0)
         weights = np.exp(-self.xi * days)
+        use_nb = self.distribution == "negbinom"
 
-        use_nb = self.distribution == 'negbinom'
-        n_extra_params = 2 if use_nb else 1  # home_adv (+ alpha)
+        def objective_and_gradient(params):
+            raw_attack = params[:n]
+            attack = raw_attack - np.mean(raw_attack)
+            defence = params[n:2 * n]
+            home_advantage = params[2 * n]
+            log_alpha = params[2 * n + 1] if use_nb else None
+            alpha = np.exp(log_alpha) if use_nb else 0.0
 
-        def unpack(params):
-            att = params[:n] - np.mean(params[:n])
-            deff = params[n:2 * n]
-            home = params[2 * n]
-            alpha = np.exp(params[2 * n + 1]) if use_nb else None  # softplus-ish, kept positive via exp
-            return att, deff, home, alpha
-
-        def nll(params):
-            att, deff, home, alpha = unpack(params)
-
-            lam_h = np.exp(home + att[home_idx] - deff[away_idx])
-            lam_a = np.exp(att[away_idx] - deff[home_idx])
-
-            lam_h = np.clip(lam_h, 1e-6, 60)
-            lam_a = np.clip(lam_a, 1e-6, 60)
+            raw_lam_h = np.exp(home_advantage + attack[home_idx] - defence[away_idx])
+            raw_lam_a = np.exp(attack[away_idx] - defence[home_idx])
+            lam_h = np.clip(raw_lam_h, 1e-6, 60.0)
+            lam_a = np.clip(raw_lam_a, 1e-6, 60.0)
+            active_h = ((raw_lam_h > 1e-6) & (raw_lam_h < 60.0)).astype(float)
+            active_a = ((raw_lam_a > 1e-6) & (raw_lam_a < 60.0)).astype(float)
 
             if use_nb:
                 r = 1.0 / alpha
-                p_h = r / (r + lam_h)
-                p_a = r / (r + lam_a)
-                logp_h = nbinom.logpmf(hc, r, p_h)
-                logp_a = nbinom.logpmf(ac, r, p_a)
-            else:
-                logp_h = poisson.logpmf(hc, lam_h)
-                logp_a = poisson.logpmf(ac, lam_a)
+                # Negative-binomial log PMF, parameterised by mean lambda
+                # and dispersion alpha (variance = lambda + alpha*lambda^2).
+                logp_h = (
+                    gammaln(hc + r) - gammaln(r) - gammaln(hc + 1.0)
+                    + r * (np.log(r) - np.log(r + lam_h))
+                    + hc * (np.log(lam_h) - np.log(r + lam_h))
+                )
+                logp_a = (
+                    gammaln(ac + r) - gammaln(r) - gammaln(ac + 1.0)
+                    + r * (np.log(r) - np.log(r + lam_a))
+                    + ac * (np.log(lam_a) - np.log(r + lam_a))
+                )
 
-            ll = np.sum(weights * (logp_h + logp_a))
-            return -ll
+                dlog_h = r * (hc - lam_h) / (r + lam_h)
+                dlog_a = r * (ac - lam_a) / (r + lam_a)
+
+                # Derivative with respect to log(alpha), using log(r)=-log(alpha).
+                dlogalpha_h = -r * (
+                    digamma(hc + r) - digamma(r)
+                    + np.log(r) + 1.0 - np.log(r + lam_h)
+                    - (r + hc) / (r + lam_h)
+                )
+                dlogalpha_a = -r * (
+                    digamma(ac + r) - digamma(r)
+                    + np.log(r) + 1.0 - np.log(r + lam_a)
+                    - (r + ac) / (r + lam_a)
+                )
+            else:
+                logp_h = hc * np.log(lam_h) - lam_h - gammaln(hc + 1.0)
+                logp_a = ac * np.log(lam_a) - lam_a - gammaln(ac + 1.0)
+                dlog_h = hc - lam_h
+                dlog_a = ac - lam_a
+                dlogalpha_h = dlogalpha_a = None
+
+            log_likelihood = float(np.sum(weights * (logp_h + logp_a)))
+            if not np.isfinite(log_likelihood):
+                return 1e12, np.zeros_like(params)
+
+            dlog_h = weights * dlog_h * active_h
+            dlog_a = weights * dlog_a * active_a
+
+            grad_attack = (
+                np.bincount(home_idx, weights=dlog_h, minlength=n)
+                + np.bincount(away_idx, weights=dlog_a, minlength=n)
+            )
+            grad_attack -= np.mean(grad_attack)
+            grad_defence = (
+                -np.bincount(away_idx, weights=dlog_h, minlength=n)
+                -np.bincount(home_idx, weights=dlog_a, minlength=n)
+            )
+
+            gradient_parts = [
+                grad_attack,
+                grad_defence,
+                np.asarray([np.sum(dlog_h)]),
+            ]
+            if use_nb:
+                grad_log_alpha = np.sum(
+                    weights * (dlogalpha_h + dlogalpha_a)
+                )
+                gradient_parts.append(np.asarray([grad_log_alpha]))
+
+            gradient = -np.concatenate(gradient_parts)
+            return -log_likelihood, gradient
 
         x0 = np.concatenate([np.zeros(n), np.zeros(n), [0.1]])
         if use_nb:
-            x0 = np.concatenate([x0, [np.log(0.3)]])  # start alpha ~ 0.3 (mild overdispersion)
+            x0 = np.concatenate([x0, [np.log(0.3)]])
 
-        bounds = [(-3, 3)] * (2 * n) + [(-1.0, 1.0)]
+        bounds = [(-3.0, 3.0)] * (2 * n) + [(-1.0, 1.0)]
         if use_nb:
             bounds += [(np.log(1e-3), np.log(5.0))]
 
-        # Try the standard optimization first, then a more conservative
-        # initialization/options if convergence is not achieved. Never
-        # claim convergence when scipy reports failure.
         attempts = [
-            (x0, {'maxiter': 300, 'ftol': 1e-9, 'gtol': 1e-6}),
-            (np.asarray(x0, dtype=float) + np.random.default_rng(42).normal(0, 0.01, size=len(x0)),
-             {'maxiter': 800, 'ftol': 1e-8, 'gtol': 1e-7}),
+            (x0, {"maxiter": 700, "ftol": 1e-9, "gtol": 1e-6, "maxls": 40}),
+            (
+                x0 + np.random.default_rng(42).normal(0.0, 0.01, size=len(x0)),
+                {"maxiter": 1000, "ftol": 1e-8, "gtol": 1e-6, "maxls": 50},
+            ),
         ]
-        res = None
-        for x0_try, options in attempts:
-            candidate = minimize(nll, x0_try, method='L-BFGS-B', bounds=bounds, options=options)
-            if res is None or candidate.fun < res.fun:
-                res = candidate
-            if candidate.success:
+
+        result = None
+        for start_params, options in attempts:
+            candidate = minimize(
+                objective_and_gradient,
+                start_params,
+                method="L-BFGS-B",
+                jac=True,
+                bounds=bounds,
+                options=options,
+            )
+            if (
+                result is None
+                or (np.isfinite(candidate.fun) and candidate.fun < result.fun)
+            ):
+                result = candidate
+            if candidate.success and np.isfinite(candidate.fun):
                 break
 
-        att, deff, home, alpha = unpack(res.x)
-        self.attack = dict(zip(self.teams, att))
-        self.defence = dict(zip(self.teams, deff))
-        self.home_adv = float(home)
-        self.alpha = float(alpha) if use_nb else 0.0
-        self.converged_ = bool(res.success)
+        if result is None or not np.isfinite(result.fun):
+            raise RuntimeError(f"Corner optimisation failed for {league!r}.")
 
+        attack = result.x[:n] - np.mean(result.x[:n])
+        defence = result.x[n:2 * n]
+        home = result.x[2 * n]
+        alpha = np.exp(result.x[2 * n + 1]) if use_nb else 0.0
+
+        self.attack = dict(zip(self.teams, attack))
+        self.defence = dict(zip(self.teams, defence))
+        self.home_adv = float(home)
+        self.alpha = float(alpha)
+        self.converged_ = bool(result.success)
+        self.optimizer_message_ = str(getattr(result, "message", ""))
+        self.optimizer_nit_ = int(getattr(result, "nit", -1))
+        self.optimizer_jac_norm_ = float(
+            np.linalg.norm(getattr(result, "jac", np.zeros_like(result.x)))
+        )
         return self
 
     def predict(self, home, away):

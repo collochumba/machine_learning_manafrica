@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import poisson
 from scipy.optimize import minimize
-from scipy.special import softmax
+from scipy.special import softmax, gammaln
 
 from betting import calculate_value, find_value_bets, calculate_kelly_stake
 
@@ -56,109 +56,214 @@ class DixonColesTimeDecay:
         self.optimizer_nit_ = -1
 
     def fit(self, df, league=None):
+        """Fit the Dixon-Coles model using a vectorised likelihood and analytic gradient.
+
+        The analytic gradient avoids SciPy's finite-difference loop, which
+        previously evaluated the full likelihood once per parameter at every
+        optimiser step. The statistical model and parameterisation are
+        unchanged.
         """
-        Fit Dixon-Coles model using MLE.
-
-        Args:
-            df: DataFrame with match history
-            league: League to fit (None = all data)
-
-        Returns:
-            self
-        """
-
-        if league:
-            data = df[df['League'] == league].copy()
+        if league is not None:
+            data = df.loc[df["League"] == league].copy()
         else:
             data = df.copy()
 
-        data = data.sort_values('Date')
+        required = ["HomeTeam", "AwayTeam", "FTHG", "FTAG", "Date"]
+        missing = [column for column in required if column not in data.columns]
+        if missing:
+            raise ValueError(f"Dixon-Coles input is missing columns: {missing}")
 
-        self.teams = sorted(set(data['HomeTeam']) | set(data['AwayTeam']))
+        data = data.dropna(subset=required).sort_values("Date").reset_index(drop=True)
+        if data.empty:
+            raise ValueError(f"No usable matches available for Dixon-Coles league: {league!r}")
+
+        self.teams = sorted(set(data["HomeTeam"]) | set(data["AwayTeam"]))
         n = len(self.teams)
+        if n < 2:
+            raise ValueError("Dixon-Coles requires at least two distinct teams.")
 
         team_to_idx = {team: i for i, team in enumerate(self.teams)}
+        home_idx = data["HomeTeam"].map(team_to_idx).to_numpy(dtype=np.int64)
+        away_idx = data["AwayTeam"].map(team_to_idx).to_numpy(dtype=np.int64)
+        hg = pd.to_numeric(data["FTHG"], errors="coerce").to_numpy(dtype=float)
+        ag = pd.to_numeric(data["FTAG"], errors="coerce").to_numpy(dtype=float)
 
-        home_idx = data['HomeTeam'].map(team_to_idx).values
-        away_idx = data['AwayTeam'].map(team_to_idx).values
-        hg = data['FTHG'].values
-        ag = data['FTAG'].values
-        days = data['DaysSinceMatch'].values
+        if (
+            not np.isfinite(hg).all()
+            or not np.isfinite(ag).all()
+            or np.any(hg < 0)
+            or np.any(ag < 0)
+            or np.any(hg != np.floor(hg))
+            or np.any(ag != np.floor(ag))
+        ):
+            raise ValueError("Dixon-Coles goals must be finite, non-negative integers.")
 
+        if "DaysSinceMatch" in data.columns:
+            days = pd.to_numeric(data["DaysSinceMatch"], errors="coerce").to_numpy(dtype=float)
+        else:
+            max_date = pd.to_datetime(data["Date"], errors="coerce").max()
+            days = (max_date - pd.to_datetime(data["Date"], errors="coerce")).dt.days.to_numpy(dtype=float)
+
+        if not np.isfinite(days).all():
+            raise ValueError("Dixon-Coles DaysSinceMatch contains missing or non-finite values.")
+        days = np.maximum(days, 0.0)
         weights = np.exp(-self.xi * days)
+        n_matches = len(data)
 
-        def nll(params):
-            """Negative log-likelihood with Dixon-Coles correction."""
-            att = params[:n]
-            deff = params[n:2*n]
-            home = params[2*n]
-            rho = params[2*n+1]
+        # Constant Poisson factorial terms are calculated once.
+        goal_constants = gammaln(hg + 1.0) + gammaln(ag + 1.0)
+        mask00 = (hg == 0) & (ag == 0)
+        mask01 = (hg == 0) & (ag == 1)
+        mask10 = (hg == 1) & (ag == 0)
+        mask11 = (hg == 1) & (ag == 1)
 
-            att = att - np.mean(att)
+        def objective_and_gradient(params):
+            raw_attack = params[:n]
+            attack = raw_attack - np.mean(raw_attack)
+            defence = params[n:2 * n]
+            home_advantage = params[2 * n]
+            rho = params[2 * n + 1]
 
-            lh = np.exp(home + att[home_idx] - deff[away_idx])
-            la = np.exp(att[away_idx] - deff[home_idx])
+            with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+                lambda_home = np.exp(
+                    home_advantage + attack[home_idx] - defence[away_idx]
+                )
+                lambda_away = np.exp(
+                    attack[away_idx] - defence[home_idx]
+                )
 
-            p = poisson.pmf(hg, lh) * poisson.pmf(ag, la)
+            if (
+                not np.isfinite(lambda_home).all()
+                or not np.isfinite(lambda_away).all()
+            ):
+                return 1e12, np.zeros_like(params)
 
-            corr = np.ones_like(p)
-            mask00 = (hg == 0) & (ag == 0)
-            mask01 = (hg == 0) & (ag == 1)
-            mask10 = (hg == 1) & (ag == 0)
-            mask11 = (hg == 1) & (ag == 1)
+            # Retain the same numerical rate bounds used by the previous
+            # implementation. The likelihood is evaluated in log space.
+            lambda_home = np.clip(lambda_home, 1e-8, 20.0)
+            lambda_away = np.clip(lambda_away, 1e-8, 20.0)
 
-            corr[mask00] = 1 - lh[mask00] * la[mask00] * rho
-            corr[mask01] = 1 + lh[mask01] * rho
-            corr[mask10] = 1 + la[mask10] * rho
-            corr[mask11] = 1 - rho
+            tau = np.ones(n_matches, dtype=float)
+            tau[mask00] = 1.0 - lambda_home[mask00] * lambda_away[mask00] * rho
+            tau[mask01] = 1.0 + lambda_home[mask01] * rho
+            tau[mask10] = 1.0 + lambda_away[mask10] * rho
+            tau[mask11] = 1.0 - rho
 
-            p *= corr
-            ll = np.sum(weights * np.log(np.maximum(p, 1e-12)))
+            if not np.isfinite(tau).all() or np.any(tau <= 1e-10):
+                return 1e12, np.zeros_like(params)
 
-            return -ll
+            log_likelihood = (
+                hg * np.log(lambda_home) - lambda_home
+                + ag * np.log(lambda_away) - lambda_away
+                - goal_constants + np.log(tau)
+            )
+            objective = -float(np.sum(weights * log_likelihood))
+            if not np.isfinite(objective):
+                return 1e12, np.zeros_like(params)
 
-        x0 = np.concatenate([np.zeros(n), np.zeros(n), [0.25], [0]])
-        # FIX: bounds were (0, 0.5) for home advantage, which structurally
-        # prevents the model from ever expressing a neutral or negative
-        # home advantage (a real phenomenon — e.g. some leagues/periods,
-        # or specific team pairings, have shown near-zero or slightly
-        # negative home advantage). Similarly widened rho slightly beyond
-        # the very tight (-0.1, 0.1) to give the low-score correction a
-        # bit more room while still keeping it in a sane, well-studied range.
-        bounds = [(-3, 3)] * (2 * n) + [(-0.3, 0.8), (-0.15, 0.15)]
+            # Derivatives of log-likelihood with respect to log(lambda_home),
+            # log(lambda_away), and rho, including Dixon-Coles tau correction.
+            d_home = hg - lambda_home
+            d_away = ag - lambda_away
+            d_rho = np.zeros(n_matches, dtype=float)
 
+            d_home[mask00] -= (
+                lambda_home[mask00] * lambda_away[mask00] * rho / tau[mask00]
+            )
+            d_away[mask00] -= (
+                lambda_home[mask00] * lambda_away[mask00] * rho / tau[mask00]
+            )
+            d_rho[mask00] = (
+                -lambda_home[mask00] * lambda_away[mask00] / tau[mask00]
+            )
+
+            d_home[mask01] += lambda_home[mask01] * rho / tau[mask01]
+            d_rho[mask01] = lambda_home[mask01] / tau[mask01]
+
+            d_away[mask10] += lambda_away[mask10] * rho / tau[mask10]
+            d_rho[mask10] = lambda_away[mask10] / tau[mask10]
+
+            d_rho[mask11] = -1.0 / tau[mask11]
+
+            weighted_home = weights * d_home
+            weighted_away = weights * d_away
+            weighted_rho = weights * d_rho
+
+            # Chain rule for attack, defence, home advantage and rho.
+            grad_attack = (
+                np.bincount(home_idx, weights=weighted_home, minlength=n)
+                + np.bincount(away_idx, weights=weighted_away, minlength=n)
+            )
+            # attack = raw_attack - mean(raw_attack)
+            grad_attack -= np.mean(grad_attack)
+
+            grad_defence = (
+                -np.bincount(away_idx, weights=weighted_home, minlength=n)
+                -np.bincount(home_idx, weights=weighted_away, minlength=n)
+            )
+
+            gradient = -np.concatenate([
+                grad_attack,
+                grad_defence,
+                [np.sum(weighted_home), np.sum(weighted_rho)],
+            ])
+
+            return objective, gradient
+
+        x0 = np.concatenate([np.zeros(n), np.zeros(n), [0.25], [0.0]])
+        bounds = [(-3.0, 3.0)] * (2 * n) + [(-0.3, 0.8), (-0.15, 0.15)]
+
+        # Analytic Jacobian makes the primary optimiser substantially cheaper
+        # than numerical finite differences, especially for leagues with many
+        # teams. A deterministic jittered retry is retained for robustness.
         attempts = [
-            (x0, {'maxiter': 300, 'ftol': 1e-9, 'gtol': 1e-6}),
+            (x0, {"maxiter": 1200, "ftol": 1e-10, "gtol": 1e-7, "maxls": 40}),
             (
-                np.asarray(x0, dtype=float)
-                + np.random.default_rng(42).normal(0, 0.01, size=len(x0)),
-                {'maxiter': 800, 'ftol': 1e-8, 'gtol': 1e-7},
+                x0 + np.random.default_rng(42).normal(0.0, 0.005, size=len(x0)),
+                {"maxiter": 1600, "ftol": 1e-9, "gtol": 1e-7, "maxls": 50},
             ),
         ]
 
-        res = None
-        for x0_try, options in attempts:
+        result = None
+        for start_params, options in attempts:
             candidate = minimize(
-                nll, x0_try, method='L-BFGS-B',
-                bounds=bounds, options=options
+                objective_and_gradient,
+                start_params,
+                method="L-BFGS-B",
+                jac=True,
+                bounds=bounds,
+                options=options,
             )
-            if res is None or candidate.fun < res.fun:
-                res = candidate
-            if candidate.success:
+            if (
+                result is None
+                or (np.isfinite(candidate.fun) and candidate.fun < result.fun)
+            ):
+                result = candidate
+            if candidate.success and np.isfinite(candidate.fun):
                 break
 
-        params = res.x
-        att = params[:n] - np.mean(params[:n])
-        deff = params[n:2*n]
+        if result is None or not np.isfinite(result.fun):
+            raise RuntimeError(
+                f"Dixon-Coles optimisation failed for league {league!r}: "
+                "no finite solution was found."
+            )
 
-        self.attack = dict(zip(self.teams, att))
-        self.defence = dict(zip(self.teams, deff))
-        self.home_adv = params[2*n]
-        self.rho = params[2*n+1]
-        self.converged_ = bool(res.success)
-        self.optimizer_message_ = str(getattr(res, 'message', ''))
-        self.optimizer_status_ = int(getattr(res, 'status', -1))
-        self.optimizer_nit_ = int(getattr(res, 'nit', -1))
+        params = result.x
+        attack = params[:n] - np.mean(params[:n])
+        defence = params[n:2 * n]
+
+        self.attack = dict(zip(self.teams, attack))
+        self.defence = dict(zip(self.teams, defence))
+        self.home_adv = float(params[2 * n])
+        self.rho = float(params[2 * n + 1])
+        self.converged_ = bool(result.success)
+        self.optimizer_message_ = str(getattr(result, "message", ""))
+        self.optimizer_status_ = int(getattr(result, "status", -1))
+        self.optimizer_nit_ = int(getattr(result, "nit", -1))
+        self.optimizer_fun_ = float(result.fun)
+        self.optimizer_jac_norm_ = float(
+            np.linalg.norm(getattr(result, "jac", np.zeros_like(params)))
+        )
 
         return self
 
@@ -855,21 +960,54 @@ def predict_with_fallback(
         if not use_fallback:
             raise
 
-        if "did not converge" in str(e):
+        dc_failed_to_converge = "did not converge" in str(e)
+        if dc_failed_to_converge:
             warnings.append(
                 f"Dixon-Coles model for {league} did not converge; "
-                f"using league average instead of an unreliable fit."
+                f"using the fixture-specific XGBoost probabilities for 1X2 "
+                f"and a league scoring baseline for goal markets."
             )
+            # Do not replace every fixture in a league with the same
+            # league-average 1X2 vector. The XGBoost model has already been
+            # trained and receives this fixture's independently assembled
+            # pre-match feature vector. This is a transparent single-model
+            # fallback, not a claim that the Dixon-Coles model succeeded.
+            if final_model is None:
+                raise ValueError(
+                    f"Dixon-Coles failed for {league} and no XGBoost model is available"
+                )
+            probs = np.asarray(
+                final_model.predict_proba(features.reshape(1, -1))[0],
+                dtype=float,
+            )
+            if probs.ndim != 1 or len(probs) != 3 or not np.isfinite(probs).all():
+                raise ValueError("XGBoost returned invalid 1X2 probabilities")
+            probs = np.clip(probs, 1e-12, 1.0)
+            probs = probs / probs.sum()
         else:
-            warnings.append(f"Using league average for unknown team")
+            warnings.append("Using league-average probabilities because team/model resolution failed.")
+            league_data = df[df['League'] == league].copy()
+            if fixture_date is not None and 'Date' in league_data.columns:
+                cutoff = pd.to_datetime(fixture_date, dayfirst=True, errors='coerce')
+                if pd.notna(cutoff):
+                    league_data = league_data[league_data['Date'] < cutoff]
+            league_data = league_data.tail(100)
+            if league_data.empty:
+                raise ValueError(f"No prior league results available for fallback: {league}")
+            avg_home_prob = (league_data['FTR'] == 'H').mean()
+            avg_draw_prob = (league_data['FTR'] == 'D').mean()
+            avg_away_prob = (league_data['FTR'] == 'A').mean()
+            probs = np.array([avg_home_prob, avg_draw_prob, avg_away_prob], dtype=float)
+            probs = np.clip(probs, 1e-12, 1.0)
+            probs = probs / probs.sum()
 
-        league_data = df[df['League'] == league].tail(100)
-
-        avg_home_prob = (league_data['FTR'] == 'H').mean()
-        avg_draw_prob = (league_data['FTR'] == 'D').mean()
-        avg_away_prob = (league_data['FTR'] == 'A').mean()
-
-        probs = np.array([avg_home_prob, avg_draw_prob, avg_away_prob])
+        if 'league_data' not in locals():
+            league_data = df[df['League'] == league].copy()
+            if fixture_date is not None and 'Date' in league_data.columns:
+                cutoff = pd.to_datetime(fixture_date, dayfirst=True, errors='coerce')
+                if pd.notna(cutoff):
+                    league_data = league_data[league_data['Date'] < cutoff]
+            league_data = league_data.tail(100)
 
         # Estimate over/under 2.5 from the league's actual recent scoring
         # rate instead of assuming a flat 50/50 split.

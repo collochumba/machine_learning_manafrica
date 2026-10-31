@@ -1,10 +1,10 @@
 {
-  "training_timestamp": "2026-08-30T17:37:59.164808",
+  "training_timestamp": "2026-10-31T19:01:26.231672",
   "dataset": {
-    "match_count": 42339,
+    "match_count": 43403,
     "date_range": [
       "2017-08-19",
-      "2026-08-27"
+      "2026-10-29"
     ],
     "seasons_requested": [
       "1718",
@@ -23,22 +23,41 @@
   "historical_data_leagues": 15,
   "ml_models": {
     "loaded": 15,
-    "out_of_fold_log_loss": 1.0440497125407544
+    "out_of_fold_log_loss": 1.0487017235406106
   },
   "dixon_coles": {
     "total_deployed": 15,
-    "converged": 14,
-    "non_converged": [
-      "Segunda Division"
-    ],
+    "converged": 15,
+    "non_converged": [],
     "missing": []
   },
   "corners": {
-    "loaded": 14,
-    "missing": [
-      "Segunda Division"
-    ],
-    "schema_version": 1,
+    "loaded": 15,
+    "missing": [],
+    "schema_version": "corners-v1",
+    "deployment_status_by_league": {
+      "2. Bundesliga": "deployed_strength",
+      "Belgian Pro League": "deployed_strength",
+      "Bundesliga": "deployed_strength",
+      "Championship": "deployed_strength",
+      "Eredivisie": "deployed_strength",
+      "Greek Super League": "deployed_strength",
+      "La Liga": "deployed_strength",
+      "Ligue 1": "deployed_strength",
+      "Ligue 2": "deployed",
+      "Premier League": "deployed_strength",
+      "Primeira Liga": "deployed_strength",
+      "Segunda Division": "deployed_strength",
+      "Serie A": "deployed_strength",
+      "Serie B": "deployed_strength",
+      "Super Lig": "deployed_strength"
+    }
+  },
+  "cards": {
+    "loaded": 15,
+    "converged_or_deployed": 15,
+    "missing": [],
+    "schema_version": "cards-v1",
     "deployment_status_by_league": {
       "2. Bundesliga": "deployed",
       "Belgian Pro League": "deployed",
@@ -51,16 +70,11 @@
       "Ligue 2": "deployed",
       "Premier League": "deployed",
       "Primeira Liga": "deployed",
-      "Segunda Division": "failed_nonconvergence",
+      "Segunda Division": "deployed",
       "Serie A": "deployed",
       "Serie B": "deployed",
       "Super Lig": "deployed"
     }
-  },
-  "cards": {
-    "loaded": 15,
-    "missing": [],
-    "schema_version": "cards-v1"
   },
   "current_teams": {
     "season_used_by_league": {
@@ -70,7 +84,7 @@
       "Segunda Division": "2627",
       "Serie A": "2627",
       "Serie B": "2627",
-      "Bundesliga": "2526",
+      "Bundesliga": "2627",
       "2. Bundesliga": "2627",
       "Ligue 1": "2627",
       "Ligue 2": "2627",
@@ -81,35 +95,234 @@
       "Greek Super League": "2627"
     },
     "team_count_by_league": {
-      "Premier League": 16,
-      "Championship": 21,
-      "La Liga": 17,
-      "Segunda Division": 21,
+      "Premier League": 20,
+      "Championship": 24,
+      "La Liga": 20,
+      "Segunda Division": 22,
       "Serie A": 20,
-      "Serie B": 18,
+      "Serie B": 20,
       "Bundesliga": 18,
-      "2. Bundesliga": 15,
-      "Ligue 1": 16,
+      "2. Bundesliga": 18,
+      "Ligue 1": 18,
       "Ligue 2": 18,
       "Eredivisie": 18,
       "Belgian Pro League": 18,
       "Primeira Liga": 18,
-      "Super Lig": 14,
-      "Greek Super League": 8
+      "Super Lig": 18,
+      "Greek Super League": 14
+    },
+    "seasons_requested_by_league": {
+      "Premier League": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "Championship": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "La Liga": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "Segunda Division": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "Serie A": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "Serie B": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "Bundesliga": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "2. Bundesliga": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "Ligue 1": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "Ligue 2": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "Eredivisie": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "Belgian Pro League": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "Primeira Liga": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "Super Lig": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ],
+      "Greek Super League": [
+        "1718",
+        "1819",
+        "1920",
+        "2021",
+        "2122",
+        "2223",
+        "2324",
+        "2425",
+        "2526",
+        "2627"
+      ]
+    },
+    "seasons_unavailable_by_league": {
+      "Premier League": [],
+      "Championship": [],
+      "La Liga": [],
+      "Segunda Division": [],
+      "Serie A": [],
+      "Serie B": [],
+      "Bundesliga": [],
+      "2. Bundesliga": [],
+      "Ligue 1": [],
+      "Ligue 2": [],
+      "Eredivisie": [],
+      "Belgian Pro League": [],
+      "Primeira Liga": [],
+      "Super Lig": [],
+      "Greek Super League": []
     }
   },
   "artifacts": {
     "final_model.pkl": {
       "exists": true,
-      "size_bytes": 2145349
+      "size_bytes": 2144383
     },
     "dc_models.pkl": {
       "exists": true,
-      "size_bytes": 16020
+      "size_bytes": 16787
     },
     "corner_model.pkl": {
       "exists": true,
-      "size_bytes": 12405268
+      "size_bytes": 12719023
     },
     "corner_feature_cols.pkl": {
       "exists": true,
@@ -117,7 +330,7 @@
     },
     "card_model.pkl": {
       "exists": true,
-      "size_bytes": 15994610
+      "size_bytes": 16296402
     },
     "card_feature_cols.pkl": {
       "exists": true,
@@ -129,24 +342,23 @@
     },
     "processed_data.pkl": {
       "exists": true,
-      "size_bytes": 11016801
+      "size_bytes": 11296824
     },
     "team_mapping.pkl": {
       "exists": true,
-      "size_bytes": 15630
+      "size_bytes": 15906
     },
     "all_teams.pkl": {
       "exists": true,
-      "size_bytes": 4744
+      "size_bytes": 4837
     },
     "current_teams.pkl": {
       "exists": true,
-      "size_bytes": 4722
+      "size_bytes": 4687
     },
     "league_config.pkl": {
       "exists": true,
       "size_bytes": 454
     }
-  },
-  "note": "Manifest generated by regenerating dc_models.pkl and corner_model.pkl from cached processed_data.pkl using the already-corrected train.py; the previously shipped artifacts were stale (pre-dated the DC convergence-retry and corner fallback fixes)."
+  }
 }

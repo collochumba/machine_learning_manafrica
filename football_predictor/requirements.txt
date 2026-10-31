@@ -10,3 +10,5 @@ tqdm>=4.66.0
 requests>=2.32.4,<3
 urllib3>=2.2.2,<3
 charset-normalizer>=3.3.2,<4
+python-dotenv>=1.0.0
+pytest>=7.4.0

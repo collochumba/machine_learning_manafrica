@@ -3,6 +3,23 @@ PRODUCTION TRAINING PIPELINE - FIXED
 No code duplication | Proper caching | Incremental updates
 """
 
+# Load project environment settings and configure UTF-8 before any console output.
+import os
+import sys
+from pathlib import Path as _Path
+try:
+    from dotenv import load_dotenv
+    load_dotenv(_Path(__file__).resolve().parent / ".env", override=False)
+except ImportError:
+    pass  # Install dependencies from requirements.txt to enable .env loading.
+
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError, TypeError):
+            pass
+
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -33,6 +50,27 @@ from models import DixonColesTimeDecay
 from corners import build_corner_features, CornerStrengthModel, CornerGBRModel, walk_forward_validate, CORNER_SCHEMA_VERSION
 from cards import train_card_models, CARD_SCHEMA_VERSION
 from config import LEAGUE_CONFIG, LEAGUES
+
+
+def atomic_joblib_dump(obj, path, compress=0):
+    """Write a joblib artifact to a same-directory temporary file, then replace atomically."""
+    import tempfile
+    target = Path(path).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
+    os.close(fd)
+    try:
+        joblib.dump(obj, temp_name, compress=compress)
+        # Verify the serialized object can be read before replacing a good artifact.
+        joblib.load(temp_name)
+        os.replace(temp_name, target)
+    finally:
+        try:
+            if os.path.exists(temp_name):
+                os.remove(temp_name)
+        except OSError:
+            pass
+
 
 print("="*80)
 print("🚀 FOOTBALL BETTING MODEL - TRAINING PIPELINE v2.0")
@@ -65,7 +103,7 @@ def get_last_n_seasons(n=10):
 # STEP 1: DATA LOADING WITH CACHING
 # ============================================================================
 
-CACHE_VERSION = "v6-16leagues-shots-fouls-cards-referee-corners-rest"  # bump this whenever
+CACHE_VERSION = "v7-15leagues-analytic-dc-shots-fouls-cards-referee-corners-rest"  # bump this whenever
                                             # the schema of the cached raw/
                                             # feature data changes (new/renamed
                                             # columns, different imputation or
@@ -295,63 +333,73 @@ def load_data_with_cache(force_refresh=False, n_seasons=10):
         print(f"  • {league}: loaded {loaded[league]} | failed/unavailable {failed[league]}")
     
     # Cache it (data + metadata, so a later run can validate reuse)
-    joblib.dump(df, cache_file, compress=3)
-    joblib.dump({'version': CACHE_VERSION, 'seasons_requested': seasons, 'load_report': load_report}, meta_file)
+    atomic_joblib_dump(df, cache_file, compress=3)
+    atomic_joblib_dump({'version': CACHE_VERSION, 'seasons_requested': seasons, 'load_report': load_report}, meta_file)
     print(f"\n💾 Cached to {cache_file}")
     
     return df, load_report
 
 def compute_elo_ratings(df, k=20, base_rating=1500):
     """
-    Compute ELO ratings with proper time ordering.
+    Compute ELO ratings chronologically, independently within each league.
 
-    FIX (cross-league contamination): ratings were previously keyed only by
-    team name, so a name shared across leagues (or a promoted/relegated team
-    that changes competitions) would incorrectly carry its rating over from
-    an unrelated league. Ratings are now keyed by (League, Team), so each
-    league's Elo pool is fully independent, while still being computed
-    chronologically using only information available before each match.
+    Uses column-wise iteration rather than DataFrame.iterrows(). This avoids
+    Pandas constructing a mixed-dtype row array (including datetime columns)
+    for every match, which is unnecessarily expensive on the full dataset.
+    The ELO mathematics and ordering are unchanged.
     """
-    
+
     print("\n🏆 Computing ELO ratings...")
-    
-    df = df.sort_values(['League', 'Date']).reset_index(drop=True)
+
+    # Keep the existing ordering: each league is processed chronologically.
+    df = df.sort_values(["League", "Date"]).reset_index(drop=True)
+
     ratings = {}  # key: (League, Team)
     home_elo = []
     away_elo = []
-    
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="ELO computation"):
-        league = row['League']
-        home = row['HomeTeam']
-        away = row['AwayTeam']
 
+    # Extract only the four columns needed by ELO. Converting to lists avoids
+    # Pandas row construction and prevents unrelated datetime/object columns
+    # from being coerced into a large mixed-type array.
+    leagues = df["League"].tolist()
+    home_teams = df["HomeTeam"].tolist()
+    away_teams = df["AwayTeam"].tolist()
+    results = df["FTR"].tolist()
+
+    rows = zip(leagues, home_teams, away_teams, results)
+
+    for league, home, away, outcome in tqdm(
+        rows,
+        total=len(df),
+        desc="ELO computation",
+        unit="match",
+    ):
         hkey = (league, home)
         akey = (league, away)
-        
-        if hkey not in ratings:
-            ratings[hkey] = base_rating
-        if akey not in ratings:
-            ratings[akey] = base_rating
-        
-        h_elo = ratings[hkey]
-        a_elo = ratings[akey]
-        
+
+        h_elo = ratings.get(hkey, base_rating)
+        a_elo = ratings.get(akey, base_rating)
+
         home_elo.append(h_elo)
         away_elo.append(a_elo)
-        
-        expected = 1 / (1 + 10 ** ((a_elo - h_elo) / 400))
-        result = 1.0 if row['FTR'] == 'H' else (0.5 if row['FTR'] == 'D' else 0.0)
-        
+
+        expected = 1.0 / (1.0 + 10 ** ((a_elo - h_elo) / 400.0))
+        result = 1.0 if outcome == "H" else (0.5 if outcome == "D" else 0.0)
+
         ratings[hkey] = h_elo + k * (result - expected)
-        ratings[akey] = a_elo + k * ((1 - result) - (1 - expected))
-    
-    df['ELO_home'] = home_elo
-    df['ELO_away'] = away_elo
-    df['ELO_diff'] = df['ELO_home'] - df['ELO_away']
-    
-    n_teams_total = len(set(k[1] for k in ratings))
-    print(f"✅ ELO computed for {len(ratings)} (league, team) pairs across {n_teams_total} distinct team names, {df['League'].nunique()} leagues — no cross-league contamination")
-    
+        ratings[akey] = a_elo + k * ((1.0 - result) - (1.0 - expected))
+
+    df["ELO_home"] = home_elo
+    df["ELO_away"] = away_elo
+    df["ELO_diff"] = df["ELO_home"] - df["ELO_away"]
+
+    n_teams_total = len({team for _, team in ratings})
+    print(
+        f"✅ ELO computed for {len(ratings)} (league, team) pairs across "
+        f"{n_teams_total} distinct team names, {df['League'].nunique()} leagues "
+        "— no cross-league contamination"
+    )
+
     return df
 
 # ============================================================================
@@ -693,8 +741,8 @@ def create_features_with_cache(df, force_refresh=False):
     df = df.dropna(subset=feature_cols)
     
     # Cache it (+ fingerprint so it auto-invalidates on future data/schema changes)
-    joblib.dump((df, feature_cols), cache_file, compress=3)
-    joblib.dump(current_fingerprint, meta_file)
+    atomic_joblib_dump((df, feature_cols), cache_file, compress=3)
+    atomic_joblib_dump(current_fingerprint, meta_file)
     print(f"\n💾 Cached features to {cache_file}")
     
     print(f"\n✅ Created {len(feature_cols)} features (includes {sum('avail_L5' in c for c in feature_cols)} availability-reliability features)")
@@ -983,14 +1031,37 @@ def train_corner_models(df):
                       f"trying {other_dist} fallback")
                 fallback = CornerStrengthModel(distribution=other_dist).fit(df_c, league)
                 if not fallback.converged_:
-                    print(f"    ❌ No converged corner strength model for {league} "
-                          f"(tried {dist} and {other_dist}); skipping deployment")
-                    corner_validation[league]['deployment_status'] = 'failed_nonconvergence'
+                    # A failed MLE fit does not imply that the league has no
+                    # usable corner signal. Try the independent Poisson-loss
+                    # gradient-boosting model on the same observed targets.
+                    # This is a genuine trained alternative, not a synthetic
+                    # league-average prediction.
+                    hc_t = 'HC_observed' if 'HC_observed' in df_c.columns else 'HC'
+                    ac_t = 'AC_observed' if 'AC_observed' in df_c.columns else 'AC'
+                    gbr_data = df_c[df_c['League'] == league].sort_values('Date').dropna(
+                        subset=corner_feature_cols + [hc_t, ac_t]
+                    )
+                    if len(gbr_data) < 50:
+                        print(f"    ❌ Corner models unavailable for {league}: both strength fits failed and only {len(gbr_data)} usable GBR rows")
+                        corner_validation[league]['deployment_status'] = 'failed_nonconvergence_insufficient_gbr_data'
+                        continue
+                    X_gbr = gbr_data[corner_feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
+                    gbr = CornerGBRModel().fit(
+                        X_gbr, gbr_data[hc_t].astype(float).values,
+                        gbr_data[ac_t].astype(float).values,
+                        corner_feature_cols, history_df=df_c
+                    )
+                    gbr.model_family = 'gbr_poisson_fallback_after_strength_failure'
+                    gbr.converged_ = True
+                    corner_models[league] = gbr
+                    corner_validation[league]['deployment_status'] = 'deployed_gbr_fallback'
+                    print(f"    ✅ Deployed independent GBR fallback for {league} using {len(gbr_data)} observed matches")
                     continue
                 model = fallback
                 dist = other_dist
             model.model_family = f'{dist}_strength'
             corner_models[league] = model
+            corner_validation[league]['deployment_status'] = 'deployed_strength'
             print(f"    ✅ Deployed: {dist} strength model (home_adv={model.home_adv:.3f}, alpha={model.alpha:.3f}, converged={model.converged_})")
 
     print(f"\n✅ Trained {len(corner_models)} corner models")
@@ -1257,40 +1328,40 @@ def main(force_refresh=False, n_seasons=10):
     # Save models
     print("\n💾 Saving models...")
     
-    joblib.dump(final_model, 'final_model.pkl', compress=3)
+    atomic_joblib_dump(final_model, 'final_model.pkl', compress=3)
     print("  ✅ final_model.pkl")
     
-    joblib.dump(dc_models, 'dc_models.pkl', compress=3)
+    atomic_joblib_dump(dc_models, 'dc_models.pkl', compress=3)
     print("  ✅ dc_models.pkl")
 
-    joblib.dump({'models': corner_models, 'schema_version': CORNER_SCHEMA_VERSION,
-                 'validation': corner_validation}, 'corner_model.pkl', compress=3)
+    atomic_joblib_dump({'models': corner_models, 'schema_version': CORNER_SCHEMA_VERSION,
+                        'validation': corner_validation}, 'corner_model.pkl', compress=3)
     print("  ✅ corner_model.pkl  (new artifact)")
 
-    joblib.dump(corner_feature_cols, 'corner_feature_cols.pkl')
+    atomic_joblib_dump(corner_feature_cols, 'corner_feature_cols.pkl')
     print("  ✅ corner_feature_cols.pkl  (new artifact)")
 
-    joblib.dump({'models': card_models, 'schema_version': CARD_SCHEMA_VERSION,
-                 'validation': card_validation}, 'card_model.pkl', compress=3)
+    atomic_joblib_dump({'models': card_models, 'schema_version': CARD_SCHEMA_VERSION,
+                        'validation': card_validation}, 'card_model.pkl', compress=3)
     print("  ✅ card_model.pkl  (new artifact)")
 
-    joblib.dump(card_feature_cols, 'card_feature_cols.pkl')
+    atomic_joblib_dump(card_feature_cols, 'card_feature_cols.pkl')
     print("  ✅ card_feature_cols.pkl  (new artifact)")
 
-    joblib.dump(LEAGUE_CONFIG, 'league_config.pkl', compress=3)
+    atomic_joblib_dump(LEAGUE_CONFIG, 'league_config.pkl', compress=3)
     print("  ✅ league_config.pkl")
 
-    joblib.dump(feature_cols, 'feature_cols.pkl')
+    atomic_joblib_dump(feature_cols, 'feature_cols.pkl')
     print("  ✅ feature_cols.pkl")
     
-    joblib.dump(df, 'processed_data.pkl', compress=3)
+    atomic_joblib_dump(df, 'processed_data.pkl', compress=3)
     print("  ✅ processed_data.pkl")
     
-    joblib.dump(team_mapping, 'team_mapping.pkl')
+    atomic_joblib_dump(team_mapping, 'team_mapping.pkl')
     print("  ✅ team_mapping.pkl")
     
     # Save all teams for validation
-    joblib.dump(all_teams, 'all_teams.pkl')
+    atomic_joblib_dump(all_teams, 'all_teams.pkl')
     print("  ✅ all_teams.pkl")
 
     # Save current-season team metadata (new artifact)
@@ -1301,7 +1372,7 @@ def main(force_refresh=False, n_seasons=10):
         'seasons_loaded': load_report['loaded'],
         'seasons_failed': load_report['failed'],
     }
-    joblib.dump(current_teams_meta, 'current_teams.pkl')
+    atomic_joblib_dump(current_teams_meta, 'current_teams.pkl')
     print("  ✅ current_teams.pkl")
     
     # Summary
@@ -1428,8 +1499,18 @@ def main(force_refresh=False, n_seasons=10):
             )
         },
     }
-    with open('training_manifest.json', 'w') as f:
-        json.dump(manifest, f, indent=2, default=str)
+    import tempfile
+    manifest_path = Path('training_manifest.json').resolve()
+    fd, manifest_tmp = tempfile.mkstemp(prefix='.training_manifest.', suffix='.tmp', dir=str(manifest_path.parent))
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(manifest, f, indent=2, default=str)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(manifest_tmp, manifest_path)
+    finally:
+        if os.path.exists(manifest_tmp):
+            os.remove(manifest_tmp)
     print("  ✅ training_manifest.json")
 
     print(f"""

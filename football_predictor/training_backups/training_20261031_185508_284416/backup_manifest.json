@@ -1,0 +1,17 @@
+{
+  "pre_existing_artifacts": [
+    "final_model.pkl",
+    "dc_models.pkl",
+    "corner_model.pkl",
+    "corner_feature_cols.pkl",
+    "card_model.pkl",
+    "card_feature_cols.pkl",
+    "league_config.pkl",
+    "feature_cols.pkl",
+    "processed_data.pkl",
+    "team_mapping.pkl",
+    "all_teams.pkl",
+    "current_teams.pkl",
+    "training_manifest.json"
+  ]
+}

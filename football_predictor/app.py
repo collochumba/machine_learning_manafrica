@@ -3,6 +3,14 @@ PROFESSIONAL STREAMLIT BETTING APP
 Complete production implementation with all features
 """
 
+# Load local environment variables before checking the training password.
+from pathlib import Path as _Path
+try:
+    from dotenv import load_dotenv
+    load_dotenv(_Path(__file__).resolve().parent / ".env", override=False)
+except ImportError:
+    pass  # Install dependencies from requirements.txt to enable .env loading.
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -14,6 +22,8 @@ import os
 import json
 import html
 import textwrap
+import subprocess
+import sys
 
 import fixtures
 from config import LEAGUE_CONFIG, SUPPORTED_LEAGUES
@@ -391,9 +401,12 @@ h3 {{ color: var(--app-text-muted); font-weight: 500; }}
 # LOAD MODELS
 # ============================================================================
 
+MODEL_LOAD_DIAGNOSTICS = []
+
 @st.cache_resource
 def load_all_models():
-    """Load all trained models and data."""
+    """Load trained artifacts and retain actionable diagnostics for optional models."""
+    MODEL_LOAD_DIAGNOSTICS.clear()
     try:
         final_model = joblib.load(load_file("final_model.pkl"))
         dc_models = joblib.load(load_file("dc_models.pkl"))
@@ -415,15 +428,25 @@ def load_all_models():
         # 1X2/goals/etc, it just won't show the Corner Predictions section.
         try:
             corner_bundle = joblib.load(load_file("corner_model.pkl"))
-            corner_models = corner_bundle.get('models')
-        except Exception:
-            corner_models = None
+            if not isinstance(corner_bundle, dict) or not isinstance(corner_bundle.get("models"), dict):
+                raise ValueError("corner_model.pkl has an unexpected bundle structure")
+            corner_models = corner_bundle["models"]
+        except Exception as exc:
+            corner_models = {}
+            MODEL_LOAD_DIAGNOSTICS.append(
+                f"Corner artifact could not be loaded: {type(exc).__name__}: {exc}"
+            )
 
         try:
             card_bundle = joblib.load(load_file("card_model.pkl"))
-            card_models = card_bundle.get('models')
-        except Exception:
-            card_models = None
+            if not isinstance(card_bundle, dict) or not isinstance(card_bundle.get("models"), dict):
+                raise ValueError("card_model.pkl has an unexpected bundle structure")
+            card_models = card_bundle["models"]
+        except Exception as exc:
+            card_models = {}
+            MODEL_LOAD_DIAGNOSTICS.append(
+                f"Card artifact could not be loaded: {type(exc).__name__}: {exc}"
+            )
 
         return final_model, dc_models, feature_cols, df, team_mapping, all_teams, current_teams_meta, corner_models, card_models, None
 
@@ -499,6 +522,109 @@ with st.sidebar.expander("📡 Data & Model Status", expanded=True):
     st.write(f"Dixon-Coles models: {trained_dc}/{configured_count} converged")
     st.write(f"Corner models: {trained_corners}/{configured_count}")
     st.write(f"Card models: {trained_cards}/{configured_count}")
+    for _diagnostic in MODEL_LOAD_DIAGNOSTICS:
+        st.warning(_diagnostic)
+    if corners_missing_leagues:
+        st.caption("Corner models unavailable for: " + ", ".join(corners_missing_leagues))
+    if cards_missing_leagues:
+        st.caption("Card models unavailable for: " + ", ".join(cards_missing_leagues))
+
+    # Deliberate, administrator-protected training action. Training is never
+    # triggered by ordinary app startup or fixture refresh.
+    with st.expander("🛠️ Train / Update Models", expanded=False):
+        configured_training_password = os.environ.get("FOOTBALL_TRAINING_PASSWORD", "")
+        if not configured_training_password:
+            try:
+                configured_training_password = st.secrets.get("FOOTBALL_TRAINING_PASSWORD", "")
+            except Exception:
+                configured_training_password = ""
+        if not configured_training_password:
+            st.warning(
+                "Training is disabled until FOOTBALL_TRAINING_PASSWORD is set "
+                "in the environment or Streamlit secrets."
+            )
+        else:
+            supplied_password = st.text_input(
+                "Administrator password",
+                type="password",
+                key="training_admin_password",
+            )
+            lock_path = os.path.join(BASE_DIR, "training.lock")
+            log_path = os.path.join(BASE_DIR, "training_dashboard.log")
+
+            active_pid = None
+            if os.path.exists(lock_path):
+                try:
+                    with open(lock_path, "r", encoding="utf-8") as _lf:
+                        active_pid = int(_lf.read().strip())
+                    os.kill(active_pid, 0)
+                except (ValueError, OSError, ProcessLookupError):
+                    active_pid = None
+                    try:
+                        os.remove(lock_path)
+                    except OSError:
+                        pass
+
+            if active_pid:
+                st.info(f"Training process is running (PID {active_pid}).")
+            if st.button(
+                "▶ Start full model training",
+                type="primary",
+                disabled=(supplied_password != configured_training_password or bool(active_pid)),
+                key="start_full_model_training",
+            ):
+                try:
+                    # Exclusive create prevents two browser sessions from
+                    # starting overlapping full retraining jobs.
+                    fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    with os.fdopen(fd, "w", encoding="utf-8") as _lf:
+                        _lf.write(str(os.getpid()))
+                    log_handle = open(log_path, "a", encoding="utf-8")
+                    command = [sys.executable, "-u", "update_models.py"]
+                    try:
+                        proc = subprocess.Popen(
+                            command,
+                            cwd=BASE_DIR,
+                            stdout=log_handle,
+                            stderr=subprocess.STDOUT,
+                            close_fds=(os.name != "nt"),
+                        )
+                    finally:
+                        log_handle.close()
+                    # Replace the temporary lock owner with the child PID.
+                    with open(lock_path, "w", encoding="utf-8") as _lf:
+                        _lf.write(str(proc.pid))
+                    st.success(
+                        f"Training started (PID {proc.pid}). Existing artifacts "
+                        "were backed up by update_models.py before retraining."
+                    )
+                except FileExistsError:
+                    st.warning("A training job is already starting or running.")
+                except Exception as _exc:
+                    try:
+                        os.remove(lock_path)
+                    except OSError:
+                        pass
+                    st.error(f"Could not start training: {_exc}")
+
+            if os.path.exists(log_path):
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as _lf:
+                        _log_tail = _lf.readlines()[-35:]
+                    with st.expander("Latest training log"):
+                        st.code("".join(_log_tail) or "No training output yet.")
+                except OSError as _exc:
+                    st.caption(f"Training log unavailable: {_exc}")
+
+            if not active_pid and st.button("↻ Reload model artifacts", key="reload_model_artifacts"):
+                load_all_models.clear()
+                st.rerun()
+
+            st.caption(
+                "Run on a persistent host with sufficient CPU/RAM. Streamlit "
+                "Community Cloud may restart long-running jobs and does not "
+                "guarantee persistence of newly written model artifacts."
+            )
 
     # Coverage numbers above are always derived from the actually-loaded
     # artifacts (dc_models/corner_models/card_models in memory right now),
@@ -850,48 +976,174 @@ with tab1:
             valid_fixtures = [r for r in resolved_fixtures if r['status'] == 'valid']
 
             if valid_fixtures:
-                st.markdown("#### Select fixtures to predict")
+                st.markdown("#### Select fixtures by league")
+                st.caption(
+                    "Open a league box to see its fixtures. Each league has its own "
+                    "searchable dropdown, so the full fixture list stays out of the way."
+                )
 
-                by_league = {}
+                # Build one fixture list per supported league.
+                by_league = {league_name: [] for league_name in SUPPORTED_LEAGUES}
                 for r in valid_fixtures:
-                    by_league.setdefault(r['league'], []).append(r)
+                    league_name = r['league']
+                    if league_name in by_league:
+                        by_league[league_name].append(r)
 
-                select_all = st.checkbox("☑ Select All", value=True, key='select_all_fixtures')
+                # Country labels are presentation only; the original league names
+                # are retained for prediction and model lookup.
+                league_country = {
+                    "Premier League": "England",
+                    "Championship": "England",
+                    "La Liga": "Spain",
+                    "Segunda Division": "Spain",
+                    "Serie A": "Italy",
+                    "Serie B": "Italy",
+                    "Bundesliga": "Germany",
+                    "2. Bundesliga": "Germany",
+                    "Ligue 1": "France",
+                    "Ligue 2": "France",
+                    "Eredivisie": "Netherlands",
+                    "Belgian Pro League": "Belgium",
+                    "Primeira Liga": "Portugal",
+                    "Super Lig": "Turkey",
+                    "Greek Super League": "Greece",
+                }
 
-                selected_keys = set()
-                for league_name in SUPPORTED_LEAGUES:
-                    league_fixtures = by_league.get(league_name)
-                    if not league_fixtures:
-                        continue
+                # Always render all 15 configured leagues, even when a
+                # particular league currently has no valid upcoming fixtures.
+                league_names = sorted(
+                    SUPPORTED_LEAGUES,
+                    key=lambda name: (league_country.get(name, "Other"), name)
+                )
 
-                    league_select = st.checkbox(
-                        f"Select {league_name} ({len(league_fixtures)})",
-                        value=select_all,
-                        key=f'select_league_{league_name}',
+                def league_state_key(name):
+                    slug = "".join(
+                        character.lower() if character.isalnum() else "_"
+                        for character in name
+                    ).strip("_")
+                    return f"league_fixture_selection_{slug}"
+
+                # Create stable display labels and a reverse lookup for each league.
+                league_options = {}
+                league_option_lookup = {}
+                for league_index, league_name in enumerate(league_names):
+                    options = []
+                    option_lookup = {}
+                    for fixture_index, r in enumerate(by_league[league_name]):
+                        home = r['home']['resolved']
+                        away = r['away']['resolved']
+                        date_text = str(r.get('date') or '').strip()
+                        time_text = str(r.get('time') or '').strip()
+                        when = " · ".join(part for part in (date_text, time_text) if part)
+                        odds_label = "odds available" if r.get('odds') else "odds unavailable"
+                        label = f"{home} vs {away}"
+                        if when:
+                            label += f" · {when}"
+                        label += f" · {odds_label} · #{fixture_index + 1}"
+                        options.append(label)
+                        option_lookup[label] = r
+                    league_options[league_name] = options
+                    league_option_lookup[league_name] = option_lookup
+
+                # Initialise each league selection once. By default, preserve the
+                # previous dashboard behaviour: all valid fixtures are selected.
+                for league_index, league_name in enumerate(league_names):
+                    state_key = league_state_key(league_name)
+                    if state_key not in st.session_state:
+                        st.session_state[state_key] = list(league_options[league_name])
+                    else:
+                        # Fixture snapshots change over time; discard stale
+                        # selections that are no longer in the current options.
+                        st.session_state[state_key] = [
+                            value for value in st.session_state[state_key]
+                            if value in league_options[league_name]
+                        ]
+
+                # Global controls.
+                global_all_col, global_clear_col, global_info_col = st.columns([1, 1, 2])
+                with global_all_col:
+                    if st.button("☑ Select all leagues", key="select_all_league_fixtures", width="stretch"):
+                        for league_name in league_names:
+                            st.session_state[league_state_key(league_name)] = list(league_options[league_name])
+                with global_clear_col:
+                    if st.button("Clear all", key="clear_all_league_fixtures", width="stretch"):
+                        for league_name in league_names:
+                            st.session_state[league_state_key(league_name)] = []
+                with global_info_col:
+                    selected_total = sum(
+                        len(st.session_state.get(league_state_key(name), []))
+                        for name in league_names
                     )
-                    st.markdown(f"**{league_name}**")
-                    for i, r in enumerate(league_fixtures):
-                        odds_label = "odds available" if r['odds'] else "odds unavailable"
-                        label = f"{r['home']['resolved']} vs {r['away']['resolved']}  ·  {odds_label}"
-                        checked = st.checkbox(label, value=league_select, key=f'fx_{league_name}_{i}')
-                        if checked:
-                            selected_keys.add((league_name, i))
+                    st.caption(f"{selected_total} of {len(valid_fixtures)} fixtures selected across {len(league_names)} leagues")
 
-                    for i, r in enumerate(league_fixtures):
-                        if (league_name, i) in selected_keys:
-                            fx = {'league': league_name, 'home': r['home']['resolved'], 'away': r['away']['resolved']}
-                            if r.get('date'):
-                                fx['date'] = r['date']
-                            if r.get('time'):
-                                fx['time'] = r['time']
-                            if r['odds']:
-                                fx['odds'] = r['odds']
-                            selected_fixtures.append(fx)
+                # Four league boxes per row. Each expander opens its own compact,
+                # searchable fixture dropdown and per-league selection controls.
+                grid_columns = st.columns(4)
+                for league_index, league_name in enumerate(league_names):
+                    column = grid_columns[league_index % 4]
+                    state_key = league_state_key(league_name)
+                    options = league_options[league_name]
+                    country = league_country.get(league_name, "Other")
+                    current_count = len(st.session_state.get(state_key, []))
+                    button_slug = state_key.replace("league_fixture_selection_", "")
+                    with column:
+                        with st.expander(
+                            f"{country} · {league_name}  ({current_count}/{len(options)})",
+                            expanded=False,
+                        ):
+                            if options:
+                                select_col, clear_col = st.columns(2)
+                                with select_col:
+                                    if st.button("Select league", key=f"select_league_{button_slug}", width="stretch"):
+                                        st.session_state[state_key] = list(options)
+                                with clear_col:
+                                    if st.button("Clear league", key=f"clear_league_{button_slug}", width="stretch"):
+                                        st.session_state[state_key] = []
 
-                predict_clicked = st.button("⚽ Predict Selected Fixtures", type="primary", width='stretch')
+                                st.multiselect(
+                                    "Choose fixtures",
+                                    options=options,
+                                    key=state_key,
+                                    placeholder="Search teams or fixtures...",
+                                    help=f"Search and select fixtures in {league_name} only.",
+                                )
+                                st.caption(
+                                    f"{len(st.session_state.get(state_key, []))} of {len(options)} selected"
+                                )
+                            else:
+                                st.caption("No valid fixtures currently available in this league.")
+
+                # Convert the league-specific selections back into the format
+                # expected by the existing prediction pipeline.
+                selected_fixtures = []
+                for league_name in league_names:
+                    state_key = league_state_key(league_name)
+                    for label in st.session_state.get(state_key, []):
+                        r = league_option_lookup[league_name].get(label)
+                        if r is None:
+                            continue
+                        fx = {
+                            'league': league_name,
+                            'home': r['home']['resolved'],
+                            'away': r['away']['resolved'],
+                        }
+                        if r.get('date'):
+                            fx['date'] = r['date']
+                        if r.get('time'):
+                            fx['time'] = r['time']
+                        if r.get('odds'):
+                            fx['odds'] = r['odds']
+                        selected_fixtures.append(fx)
+
+                st.markdown(" ")
+                predict_clicked = st.button(
+                    f"⚽ Predict Selected Fixtures ({len(selected_fixtures)})",
+                    type="primary",
+                    width="stretch",
+                )
                 run_predictions = predict_clicked and bool(selected_fixtures)
                 if predict_clicked and not selected_fixtures:
-                    st.warning("No fixtures selected.")
+                    st.warning("No fixtures selected. Open a league and select at least one fixture.")
 
     # ========================================================================
     # MODE: PASTE FIXTURES MANUALLY (unchanged backup workflow)

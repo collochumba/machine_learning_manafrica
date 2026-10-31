@@ -93,8 +93,13 @@ class CardPredictionModel:
         self.ref_history = {}
         self.converged_ = False
 
-    def fit(self, df, league):
-        data, feature_cols = build_card_features(df)
+    def fit(self, df, league, prepared_features=None):
+        # Training orchestration can build the full lagged feature frame once
+        # and reuse it across all 15 leagues instead of rebuilding it per league.
+        if prepared_features is None:
+            data, feature_cols = build_card_features(df)
+        else:
+            data, feature_cols = prepared_features
         data = data[data["League"] == league].copy()
         self.feature_cols = feature_cols
         X = data[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
@@ -181,17 +186,22 @@ class CardPredictionModel:
 
 def train_card_models(df):
     models = {}
-    feature_cols = None
     validation = {}
+    # Feature engineering is independent of the target league and all
+    # features are lagged. Compute once, then reuse for each league.
+    prepared_features = build_card_features(df)
+    feature_cols = prepared_features[1]
     for league in sorted(df["League"].dropna().unique()):
         try:
-            model = CardPredictionModel().fit(df, league)
+            model = CardPredictionModel().fit(
+                df, league, prepared_features=prepared_features
+            )
             models[league] = model
             feature_cols = model.feature_cols
             # Genuine chronological holdout diagnostic using the same lagged
             # feature construction. This is a validation metric, not an
             # in-sample performance claim.
-            data, cols = build_card_features(df)
+            data, cols = prepared_features
             data = data[data["League"] == league].dropna(subset=[c for c in cols] + ["HY_observed", "AY_observed"] if "HY_observed" in data.columns else [c for c in cols] + ["HY", "AY"]).copy()
             n = len(data)
             split = max(20, int(n * 0.8))

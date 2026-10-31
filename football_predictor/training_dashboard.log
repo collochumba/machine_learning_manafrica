@@ -1,0 +1,1381 @@
+================================================================================
+Traceback (most recent call last):
+  File "C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\update_models.py", line 18, in <module>
+    from train import main
+  File "C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\train.py", line 59, in <module>
+    print("\U0001f680 FOOTBALL BETTING MODEL - TRAINING PIPELINE v2.0")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f680' in position 0: character maps to <undefined>
+================================================================================
+🚀 FOOTBALL BETTING MODEL - TRAINING PIPELINE v2.0
+================================================================================
+Backed up 9 existing artifacts.
+
+📥 Downloading fresh data from football-data.co.uk...
+Requested seasons (10): ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627']
+
+Premier League:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 80 matches
+
+Championship:
+  ✅ 1718: 552 matches
+  ✅ 1819: 552 matches
+  ✅ 1920: 552 matches
+  ✅ 2021: 552 matches
+  ✅ 2122: 552 matches
+  ✅ 2223: 552 matches
+  ✅ 2324: 552 matches
+  ✅ 2425: 552 matches
+  ✅ 2526: 552 matches
+  ✅ 2627: 144 matches
+
+La Liga:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 99 matches
+
+Segunda Division:
+  ✅ 1718: 462 matches
+  ✅ 1819: 462 matches
+  ✅ 1920: 462 matches
+  ✅ 2021: 462 matches
+  ✅ 2122: 462 matches
+  ✅ 2223: 462 matches
+  ✅ 2324: 462 matches
+  ✅ 2425: 462 matches
+  ✅ 2526: 462 matches
+  ✅ 2627: 121 matches
+
+Serie A:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 90 matches
+
+Serie B:
+  ✅ 1718: 462 matches
+  ✅ 1819: 342 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 90 matches
+
+Bundesliga:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 63 matches
+
+2. Bundesliga:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 81 matches
+
+Ligue 1:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 279 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 72 matches
+
+Ligue 2:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 280 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 379 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 90 matches
+
+Eredivisie:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 232 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 90 matches
+
+Belgian Pro League:
+  ✅ 1718: 240 matches
+  ✅ 1819: 240 matches
+  ✅ 1920: 232 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 312 matches
+  ✅ 2425: 312 matches
+  ✅ 2526: 311 matches
+  ✅ 2627: 80 matches
+
+Primeira Liga:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 81 matches
+
+Super Lig:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 420 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 342 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 342 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 81 matches
+
+Greek Super League:
+  ✅ 1718: 240 matches
+  ✅ 1819: 240 matches
+  ✅ 1920: 240 matches
+  ✅ 2021: 240 matches
+  ✅ 2122: 240 matches
+  ✅ 2223: 240 matches
+  ✅ 2324: 240 matches
+  ✅ 2425: 233 matches
+  ✅ 2526: 236 matches
+  ✅ 2627: 55 matches
+
+📉 Missing-statistic rates (time-safe imputed, no future leakage):
+  • HS: 0.1% imputed
+  • AS: 0.1% imputed
+  • HST: 0.1% imputed
+  • AST: 0.1% imputed
+  • HC: 0.1% imputed
+  • AC: 0.1% imputed
+  • HF: 1.2% imputed
+  • AF: 1.2% imputed
+  • HY: 0.1% imputed
+  • AY: 0.1% imputed
+  • HR: 0.1% imputed
+  • AR: 0.1% imputed
+
+📊 Season load summary:
+Configured leagues: 15
+Actually loaded leagues: 15
+Failed/unavailable leagues: 0
+Failed/unavailable leagues: 0
+  • Premier League: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Championship: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • La Liga: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Segunda Division: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Serie A: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Serie B: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Bundesliga: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • 2. Bundesliga: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Ligue 1: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Ligue 2: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Eredivisie: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Belgian Pro League: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Primeira Liga: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Super Lig: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Greek Super League: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+
+💾 Cached to cache\raw_data.pkl
+
+🏆 Computing ELO ratings...
+ELO computation:   0%|          | 0/44171 [00:00<?, ?it/s]ELO computation:   0%|          | 0/44171 [00:00<?, ?it/s]
+Traceback (most recent call last):
+  File "C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\update_models.py", line 243, in <module>
+    main_safe(
+    ~~~~~~~~~^
+        force_refresh=force,
+        ^^^^^^^^^^^^^^^^^^^^
+        n_seasons=n_seasons
+        ^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\update_models.py", line 178, in main_safe
+    main(
+    ~~~~^
+        force_refresh=force_refresh,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        n_seasons=n_seasons
+        ^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\train.py", line 1299, in main
+    df = compute_elo_ratings(df)
+  File "C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\train.py", line 365, in compute_elo_ratings
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="ELO computation"):
+                  ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\tqdm\std.py", line 1181, in __iter__
+    for obj in iterable:
+               ^^^^^^^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py", line 1562, in iterrows
+    for k, v in zip(self.index, self.values):
+                                ^^^^^^^^^^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py", line 12691, in values
+    return self._mgr.as_array()
+           ~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\managers.py", line 1713, in as_array
+    arr = self._interleave(dtype=dtype, na_value=na_value)
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\managers.py", line 1754, in _interleave
+    arr = blk.get_values(dtype)
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\blocks.py", line 2324, in get_values
+    values = values.astype(object)
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\arrays\datetimes.py", line 741, in astype
+    return dtl.DatetimeLikeArrayMixin.astype(self, dtype, copy)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\arrays\datetimelike.py", line 477, in astype
+    converted = ints_to_pydatetime(
+        i8data,
+    ...<2 lines>...
+        reso=self._creso,
+    )
+KeyboardInterrupt
+================================================================================
+🚀 FOOTBALL BETTING MODEL - TRAINING PIPELINE v2.0
+================================================================================
+
+===========================================================================
+FOOTBALL PREDICTOR - SAFE MODEL TRAINING
+===========================================================================
+
+Creating backup of existing model artifacts...
+Backed up 9 existing artifacts.
+
+Starting model training...
+
+
+📥 Downloading fresh data from football-data.co.uk...
+Requested seasons (10): ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627']
+
+Premier League:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 80 matches
+
+Championship:
+  ✅ 1718: 552 matches
+  ✅ 1819: 552 matches
+  ✅ 1920: 552 matches
+  ✅ 2021: 552 matches
+  ✅ 2122: 552 matches
+  ✅ 2223: 552 matches
+  ✅ 2324: 552 matches
+  ✅ 2425: 552 matches
+  ✅ 2526: 552 matches
+  ✅ 2627: 144 matches
+
+La Liga:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 99 matches
+
+Segunda Division:
+  ✅ 1718: 462 matches
+  ✅ 1819: 462 matches
+  ✅ 1920: 462 matches
+  ✅ 2021: 462 matches
+  ✅ 2122: 462 matches
+  ✅ 2223: 462 matches
+  ✅ 2324: 462 matches
+  ✅ 2425: 462 matches
+  ✅ 2526: 462 matches
+  ✅ 2627: 121 matches
+
+Serie A:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 90 matches
+
+Serie B:
+  ✅ 1718: 462 matches
+  ✅ 1819: 342 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 90 matches
+
+Bundesliga:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 63 matches
+
+2. Bundesliga:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 81 matches
+
+Ligue 1:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 279 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 72 matches
+
+Ligue 2:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 280 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 379 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 90 matches
+
+Eredivisie:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 232 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 90 matches
+
+Belgian Pro League:
+  ✅ 1718: 240 matches
+  ✅ 1819: 240 matches
+  ✅ 1920: 232 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 312 matches
+  ✅ 2425: 312 matches
+  ✅ 2526: 311 matches
+  ✅ 2627: 80 matches
+
+Primeira Liga:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 81 matches
+
+Super Lig:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 420 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 342 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 342 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 81 matches
+
+Greek Super League:
+  ✅ 1718: 240 matches
+  ✅ 1819: 240 matches
+  ✅ 1920: 240 matches
+  ✅ 2021: 240 matches
+  ✅ 2122: 240 matches
+  ✅ 2223: 240 matches
+  ✅ 2324: 240 matches
+  ✅ 2425: 233 matches
+  ✅ 2526: 236 matches
+  ✅ 2627: 55 matches
+
+📉 Missing-statistic rates (time-safe imputed, no future leakage):
+  • HS: 0.1% imputed
+  • AS: 0.1% imputed
+  • HST: 0.1% imputed
+  • AST: 0.1% imputed
+  • HC: 0.1% imputed
+  • AC: 0.1% imputed
+  • HF: 1.2% imputed
+  • AF: 1.2% imputed
+  • HY: 0.1% imputed
+  • AY: 0.1% imputed
+  • HR: 0.1% imputed
+  • AR: 0.1% imputed
+
+📊 Season load summary:
+Configured leagues: 15
+Actually loaded leagues: 15
+Failed/unavailable leagues: 0
+Failed/unavailable leagues: 0
+  • Premier League: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Championship: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • La Liga: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Segunda Division: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Serie A: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Serie B: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Bundesliga: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • 2. Bundesliga: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Ligue 1: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Ligue 2: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Eredivisie: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Belgian Pro League: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Primeira Liga: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Super Lig: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Greek Super League: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+
+💾 Cached to cache\raw_data.pkl
+
+🏆 Computing ELO ratings...
+ELO computation:   0%|          | 0/44171 [00:00<?, ?it/s]ELO computation:   0%|          | 1/44171 [00:00<10:12:46,  1.20it/s]ELO computation:   1%|          | 392/44171 [00:00<01:16, 573.61it/s]ELO computation:   2%|▏         | 848/44171 [00:01<00:34, 1263.08it/s]ELO computation:   3%|▎         | 1424/44171 [00:01<00:19, 2153.93it/s]ELO computation:   5%|▍         | 2007/44171 [00:01<00:14, 2964.03it/s]ELO computation:   6%|▋         | 2767/44171 [00:01<00:10, 4074.13it/s]ELO computation:   8%|▊         | 3705/44171 [00:01<00:07, 5425.84it/s]ELO computation:  10%|█         | 4420/44171 [00:01<00:06, 5885.82it/s]ELO computation:  12%|█▏        | 5256/44171 [00:01<00:05, 6567.38it/s]ELO computation:  14%|█▍        | 6077/44171 [00:01<00:05, 7030.73it/s]ELO computation:  16%|█▋        | 7200/44171 [00:01<00:04, 8236.85it/s]ELO computation:  19%|█▉        | 8336/44171 [00:01<00:03, 9144.42it/s]ELO computation:  22%|██▏       | 9546/44171 [00:02<00:03, 10012.11it/s]ELO computation:  24%|██▍       | 10613/44171 [00:02<00:03, 10205.98it/s]ELO computation:  27%|██▋       | 11730/44171 [00:02<00:03, 10491.47it/s]ELO computation:  29%|██▉       | 12956/44171 [00:02<00:02, 11016.44it/s]ELO computation:  32%|███▏      | 14124/44171 [00:02<00:02, 11211.47it/s]ELO computation:  35%|███▍      | 15254/44171 [00:02<00:02, 11184.50it/s]ELO computation:  37%|███▋      | 16469/44171 [00:02<00:02, 11470.88it/s]ELO computation:  40%|████      | 17736/44171 [00:02<00:02, 11828.94it/s]ELO computation:  43%|████▎     | 19007/44171 [00:02<00:02, 12090.58it/s]ELO computation:  46%|████▌     | 20227/44171 [00:02<00:01, 12120.72it/s]ELO computation:  49%|████▊     | 21514/44171 [00:03<00:01, 12343.87it/s]ELO computation:  52%|█████▏    | 22790/44171 [00:03<00:01, 12466.72it/s]ELO computation:  55%|█████▍    | 24090/44171 [00:03<00:01, 12622.50it/s]ELO computation:  57%|█████▋    | 25353/44171 [00:03<00:03, 6244.35it/s] ELO computation:  60%|█████▉    | 26323/44171 [00:04<00:03, 4784.07it/s]ELO computation:  61%|██████▏   | 27086/44171 [00:04<00:03, 4489.09it/s]ELO computation:  63%|██████▎   | 27731/44171 [00:04<00:03, 4352.87it/s]ELO computation:  64%|██████▍   | 28300/44171 [00:04<00:03, 4536.34it/s]ELO computation:  66%|██████▌   | 28949/44171 [00:04<00:03, 4909.64it/s]ELO computation:  67%|██████▋   | 29701/44171 [00:04<00:02, 5469.55it/s]ELO computation:  69%|██████▉   | 30528/44171 [00:04<00:02, 6125.20it/s]ELO computation:  71%|███████   | 31222/44171 [00:04<00:02, 6070.94it/s]ELO computation:  73%|███████▎  | 32172/44171 [00:05<00:01, 6947.53it/s]ELO computation:  75%|███████▍  | 32939/44171 [00:05<00:01, 7138.54it/s]ELO computation:  76%|███████▋  | 33694/44171 [00:05<00:01, 7225.60it/s]ELO computation:  78%|███████▊  | 34446/44171 [00:05<00:01, 7121.94it/s]ELO computation:  80%|███████▉  | 35179/44171 [00:05<00:01, 7057.38it/s]ELO computation:  81%|████████▏ | 35899/44171 [00:05<00:01, 6756.76it/s]ELO computation:  83%|████████▎ | 36587/44171 [00:05<00:01, 6381.53it/s]ELO computation:  84%|████████▍ | 37236/44171 [00:05<00:01, 6006.83it/s]ELO computation:  86%|████████▌ | 37847/44171 [00:05<00:01, 5723.02it/s]ELO computation:  88%|████████▊ | 38667/44171 [00:06<00:00, 6379.53it/s]ELO computation:  89%|████████▉ | 39319/44171 [00:06<00:01, 3241.73it/s]ELO computation:  91%|█████████ | 40043/44171 [00:06<00:01, 3903.41it/s]ELO computation:  92%|█████████▏| 40800/44171 [00:06<00:00, 4603.88it/s]ELO computation:  94%|█████████▍| 41571/44171 [00:06<00:00, 5269.33it/s]ELO computation:  96%|█████████▌| 42318/44171 [00:06<00:00, 5784.80it/s]ELO computation:  97%|█████████▋| 43010/44171 [00:07<00:00, 5473.53it/s]ELO computation:  99%|█████████▉| 43639/44171 [00:07<00:00, 5602.75it/s]ELO computation: 100%|██████████| 44171/44171 [00:07<00:00, 6096.28it/s]
+✅ ELO computed for 530 (league, team) pairs across 422 distinct team names, 15 leagues — no cross-league contamination
+
+🔧 Creating features...
+  • Goals rolling averages...
+  • Shots rolling averages...
+  • Corners rolling averages...
+  • Shot/shots-on-target-against rolling averages...
+  • Shots-on-target percentage...
+  • Fouls rolling averages...
+  • Cards rolling averages (yellow, red)...
+  • Referee historical averages (fouls, cards)...
+  • Stats-availability reliability (rolling)...
+  • Form features (PPG)...
+  • Rest / schedule congestion features...
+  • Matchup differentials...
+  • League dummies...
+
+💾 Cached features to cache\features.pkl
+
+✅ Created 67 features (includes 6 availability-reliability features)
+📊 43,403 matches after engineering
+
+🤖 Training ML model...
+✅ Feature validation passed: 67 features
+  • Computing out-of-fold performance (walk-forward, single-level calibration)...
+  • Walk-forward log-loss:  1.0487  (32550/43403 rows)  <-- PRIMARY METRIC
+  • Walk-forward accuracy:  0.4891
+  • Walk-forward Brier:     0.6091
+✅ ML Model trained
+  • In-sample log-loss:     0.9450  (diagnostic only — DO NOT use to judge live performance)
+  • Walk-forward log-loss:  1.0487  (this is the number that matters)
+
+🎯 Training Dixon-Coles models...
+
+  Training 2. Bundesliga...
+    ✅ Teams: 37
+    ✅ Home adv: 0.249
+    ✅ Converged: True
+
+  Training Belgian Pro League...
+    ✅ Teams: 27
+    ✅ Home adv: 0.220
+    ✅ Converged: True
+
+  Training Bundesliga...
+    ✅ Teams: 30
+    ✅ Home adv: 0.236
+    ✅ Converged: True
+
+  Training Championship...
+    ✅ Teams: 47
+    ✅ Home adv: 0.219
+    ✅ Converged: True
+
+  Training Eredivisie...
+Traceback (most recent call last):
+  File "C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\update_models.py", line 397, in <module>
+    run_training(
+    ~~~~~~~~~~~~^
+        force_refresh=force_refresh,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        n_seasons=n_seasons
+        ^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\update_models.py", line 267, in run_training
+    training_main(
+    ~~~~~~~~~~~~~^
+        force_refresh=force_refresh,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        n_seasons=n_seasons
+        ^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\train.py", line 1304, in main
+    # ELO (now scoped per (League, Team) — no cross-league contamination)
+  File "C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\train.py", line 907, in train_dixon_coles
+    dc_models = {}
+        ^^^^^^^^^^
+  File "C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\models.py", line 151, in fit
+    candidate = minimize(
+        nll, x0_try, method='L-BFGS-B', bounds=bounds, options=options
+    )
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_minimize.py", line 784, in minimize
+    res = _minimize_lbfgsb(fun, x0, args, jac, bounds,
+                           callback=callback, **options)
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_lbfgsb_py.py", line 469, in _minimize_lbfgsb
+    f, g = func_and_grad(x)
+           ~~~~~~~~~~~~~^^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentiable_functions.py", line 413, in fun_and_grad
+    self._update_grad()
+    ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentiable_functions.py", line 375, in _update_grad
+    self.g = self._wrapped_grad(self.x, f0=self.f)
+             ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentiable_functions.py", line 41, in __call__
+    g, dct = approx_derivative(
+             ~~~~~~~~~~~~~~~~~^
+        self.fun,
+        ^^^^^^^^^
+    ...<2 lines>...
+        **self.finite_diff_options,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_numdiff.py", line 593, in approx_derivative
+    J, _nfev = _dense_difference(fun_wrapped, x0, f0, h,
+               ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+                             use_one_sided, method,
+                             ^^^^^^^^^^^^^^^^^^^^^^
+                             mf)
+                             ^^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_numdiff.py", line 686, in _dense_difference
+    df = [f_eval - f0 for f_eval in f_evals]
+                                    ^^^^^^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_numdiff.py", line 879, in __call__
+    f = np.atleast_1d(self.fun(x, *self.args, **self.kwargs))
+                      ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 603, in __call__
+    fx = self.f(np.copy(x), *self.args)
+  File "C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\models.py", line 123, in nll
+    poisson.logpmf(hg, lh)
+    ~~~~~~~~~~~~~~^^^^^^^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\stats\_distn_infrastructure.py", line 3568, in logpmf
+    cond1 = cond1 & self._nonzero(k, *args)
+                    ~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\chumb\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\stats\_distn_infrastructure.py", line 3436, in _nonzero
+    return floor(k) == k
+           ~~~~~^^^
+KeyboardInterrupt
+================================================================================
+🚀 FOOTBALL BETTING MODEL - TRAINING PIPELINE v2.0
+================================================================================
+
+===========================================================================
+FOOTBALL PREDICTOR - SAFE MODEL TRAINING
+===========================================================================
+
+Creating backup of existing model artifacts...
+Backed up 9 existing artifacts.
+
+Starting model training...
+
+
+📥 Downloading fresh data from football-data.co.uk...
+Requested seasons (10): ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627']
+
+Premier League:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 80 matches
+
+Championship:
+  ✅ 1718: 552 matches
+  ✅ 1819: 552 matches
+  ✅ 1920: 552 matches
+  ✅ 2021: 552 matches
+  ✅ 2122: 552 matches
+  ✅ 2223: 552 matches
+  ✅ 2324: 552 matches
+  ✅ 2425: 552 matches
+  ✅ 2526: 552 matches
+  ✅ 2627: 144 matches
+
+La Liga:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 99 matches
+
+Segunda Division:
+  ✅ 1718: 462 matches
+  ✅ 1819: 462 matches
+  ✅ 1920: 462 matches
+  ✅ 2021: 462 matches
+  ✅ 2122: 462 matches
+  ✅ 2223: 462 matches
+  ✅ 2324: 462 matches
+  ✅ 2425: 462 matches
+  ✅ 2526: 462 matches
+  ✅ 2627: 121 matches
+
+Serie A:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 90 matches
+
+Serie B:
+  ✅ 1718: 462 matches
+  ✅ 1819: 342 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 90 matches
+
+Bundesliga:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 63 matches
+
+2. Bundesliga:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 81 matches
+
+Ligue 1:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 279 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 72 matches
+
+Ligue 2:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 280 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 379 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 90 matches
+
+Eredivisie:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 232 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 90 matches
+
+Belgian Pro League:
+  ✅ 1718: 240 matches
+  ✅ 1819: 240 matches
+  ✅ 1920: 232 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 312 matches
+  ✅ 2425: 312 matches
+  ✅ 2526: 311 matches
+  ✅ 2627: 80 matches
+
+Primeira Liga:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 81 matches
+
+Super Lig:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+================================================================================
+🚀 FOOTBALL BETTING MODEL - TRAINING PIPELINE v2.0
+================================================================================
+
+============================================================================
+FOOTBALL PREDICTOR — SAFE MODEL TRAINING
+============================================================================
+Backup created: C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\training_backups\training_20261031_185508_284416
+Existing artifacts backed up: 13
+
+Starting training pipeline...
+
+📥 Downloading fresh data from football-data.co.uk...
+Requested seasons (10): ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627']
+
+Premier League:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 80 matches
+
+Championship:
+  ✅ 1718: 552 matches
+  ✅ 1819: 552 matches
+  ✅ 1920: 552 matches
+  ✅ 2021: 552 matches
+  ✅ 2122: 552 matches
+  ✅ 2223: 552 matches
+  ✅ 2324: 552 matches
+  ✅ 2425: 552 matches
+  ✅ 2526: 552 matches
+  ✅ 2627: 144 matches
+
+La Liga:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 99 matches
+
+Segunda Division:
+  ✅ 1718: 462 matches
+  ✅ 1819: 462 matches
+  ✅ 1920: 462 matches
+  ✅ 2021: 462 matches
+  ✅ 2122: 462 matches
+  ✅ 2223: 462 matches
+  ✅ 2324: 462 matches
+  ✅ 2425: 462 matches
+  ✅ 2526: 462 matches
+  ✅ 2627: 121 matches
+
+Serie A:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 90 matches
+
+Serie B:
+  ✅ 1718: 462 matches
+  ✅ 1819: 342 matches
+  ✅ 1920: 380 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 380 matches
+  ✅ 2526: 380 matches
+  ✅ 2627: 90 matches
+
+Bundesliga:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 63 matches
+
+2. Bundesliga:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 81 matches
+
+Ligue 1:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 279 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 72 matches
+
+Ligue 2:
+  ✅ 1718: 380 matches
+  ✅ 1819: 380 matches
+  ✅ 1920: 280 matches
+  ✅ 2021: 380 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 380 matches
+  ✅ 2324: 379 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 90 matches
+
+Eredivisie:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 232 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 90 matches
+
+Belgian Pro League:
+  ✅ 1718: 240 matches
+  ✅ 1819: 240 matches
+  ✅ 1920: 232 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 312 matches
+  ✅ 2425: 312 matches
+  ✅ 2526: 311 matches
+  ✅ 2627: 80 matches
+
+Primeira Liga:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 306 matches
+  ✅ 2122: 306 matches
+  ✅ 2223: 306 matches
+  ✅ 2324: 306 matches
+  ✅ 2425: 306 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 81 matches
+
+Super Lig:
+  ✅ 1718: 306 matches
+  ✅ 1819: 306 matches
+  ✅ 1920: 306 matches
+  ✅ 2021: 420 matches
+  ✅ 2122: 380 matches
+  ✅ 2223: 342 matches
+  ✅ 2324: 380 matches
+  ✅ 2425: 342 matches
+  ✅ 2526: 306 matches
+  ✅ 2627: 81 matches
+
+Greek Super League:
+  ✅ 1718: 240 matches
+  ✅ 1819: 240 matches
+  ✅ 1920: 240 matches
+  ✅ 2021: 240 matches
+  ✅ 2122: 240 matches
+  ✅ 2223: 240 matches
+  ✅ 2324: 240 matches
+  ✅ 2425: 233 matches
+  ✅ 2526: 236 matches
+  ✅ 2627: 55 matches
+
+📉 Missing-statistic rates (time-safe imputed, no future leakage):
+  • HS: 0.1% imputed
+  • AS: 0.1% imputed
+  • HST: 0.1% imputed
+  • AST: 0.1% imputed
+  • HC: 0.1% imputed
+  • AC: 0.1% imputed
+  • HF: 1.2% imputed
+  • AF: 1.2% imputed
+  • HY: 0.1% imputed
+  • AY: 0.1% imputed
+  • HR: 0.1% imputed
+  • AR: 0.1% imputed
+
+📊 Season load summary:
+Configured leagues: 15
+Actually loaded leagues: 15
+Failed/unavailable leagues: 0
+Failed/unavailable leagues: 0
+  • Premier League: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Championship: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • La Liga: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Segunda Division: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Serie A: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Serie B: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Bundesliga: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • 2. Bundesliga: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Ligue 1: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Ligue 2: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Eredivisie: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Belgian Pro League: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Primeira Liga: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Super Lig: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+  • Greek Super League: loaded ['1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526', '2627'] | failed/unavailable []
+
+💾 Cached to cache\raw_data.pkl
+
+🏆 Computing ELO ratings...
+ELO computation:   0%|          | 0/44171 [00:00<?, ?match/s]ELO computation:  78%|███████▊  | 34652/44171 [00:00<00:00, 346477.37match/s]ELO computation: 100%|██████████| 44171/44171 [00:00<00:00, 334117.71match/s]
+✅ ELO computed for 530 (league, team) pairs across 422 distinct team names, 15 leagues — no cross-league contamination
+
+🔧 Creating features...
+  • Goals rolling averages...
+  • Shots rolling averages...
+  • Corners rolling averages...
+  • Shot/shots-on-target-against rolling averages...
+  • Shots-on-target percentage...
+  • Fouls rolling averages...
+  • Cards rolling averages (yellow, red)...
+  • Referee historical averages (fouls, cards)...
+  • Stats-availability reliability (rolling)...
+  • Form features (PPG)...
+  • Rest / schedule congestion features...
+  • Matchup differentials...
+  • League dummies...
+
+💾 Cached features to cache\features.pkl
+
+✅ Created 67 features (includes 6 availability-reliability features)
+📊 43,403 matches after engineering
+
+🤖 Training ML model...
+✅ Feature validation passed: 67 features
+  • Computing out-of-fold performance (walk-forward, single-level calibration)...
+  • Walk-forward log-loss:  1.0487  (32550/43403 rows)  <-- PRIMARY METRIC
+  • Walk-forward accuracy:  0.4891
+  • Walk-forward Brier:     0.6091
+✅ ML Model trained
+  • In-sample log-loss:     0.9450  (diagnostic only — DO NOT use to judge live performance)
+  • Walk-forward log-loss:  1.0487  (this is the number that matters)
+
+🎯 Training Dixon-Coles models...
+
+  Training 2. Bundesliga...
+    ✅ Teams: 37
+    ✅ Home adv: 0.249
+    ✅ Converged: True
+
+  Training Belgian Pro League...
+    ✅ Teams: 27
+    ✅ Home adv: 0.220
+    ✅ Converged: True
+
+  Training Bundesliga...
+    ✅ Teams: 30
+    ✅ Home adv: 0.236
+    ✅ Converged: True
+
+  Training Championship...
+    ✅ Teams: 47
+    ✅ Home adv: 0.219
+    ✅ Converged: True
+
+  Training Eredivisie...
+    ✅ Teams: 27
+    ✅ Home adv: 0.172
+    ✅ Converged: True
+
+  Training Greek Super League...
+    ✅ Teams: 23
+    ✅ Home adv: 0.240
+    ✅ Converged: True
+
+  Training La Liga...
+    ✅ Teams: 31
+    ✅ Home adv: 0.288
+    ✅ Converged: True
+
+  Training Ligue 1...
+    ✅ Teams: 31
+    ✅ Home adv: 0.194
+    ✅ Converged: True
+
+  Training Ligue 2...
+    ✅ Teams: 44
+    ✅ Home adv: 0.144
+    ✅ Converged: True
+
+  Training Premier League...
+    ✅ Teams: 34
+    ✅ Home adv: 0.167
+    ✅ Converged: True
+
+  Training Primeira Liga...
+    ✅ Teams: 30
+    ✅ Home adv: 0.163
+    ✅ Converged: True
+
+  Training Segunda Division...
+    ✅ Teams: 50
+    ✅ Home adv: 0.272
+    ✅ Converged: True
+
+  Training Serie A...
+    ✅ Teams: 32
+    ✅ Home adv: 0.102
+    ✅ Converged: True
+
+  Training Serie B...
+    ✅ Teams: 51
+    ✅ Home adv: 0.216
+    ✅ Converged: True
+
+  Training Super Lig...
+    ✅ Teams: 36
+    ✅ Home adv: 0.257
+    ✅ Converged: True
+
+✅ Dixon-Coles: 15/15 leagues converged (0 deployed non-converged, fallback-safe at predict time)
+
+⚽ Training dedicated corner models...
+
+  Corner model — 2. Bundesliga...
+    Walk-forward recommendation: negbinom_strength
+      poisson_strength   MAE=2.181  RMSE=2.738  PoissonDev=1.543  (n=1575)
+      negbinom_strength  MAE=2.180  RMSE=2.738  PoissonDev=1.543  (n=1575)
+      gbr_poisson        MAE=2.211  RMSE=2.809  PoissonDev=1.616  (n=1848)
+    ✅ Deployed: negbinom strength model (home_adv=0.133, alpha=0.069, converged=True)
+
+  Corner model — Belgian Pro League...
+    Walk-forward recommendation: negbinom_strength
+      poisson_strength   MAE=2.105  RMSE=2.680  PoissonDev=1.483  (n=1573)
+      negbinom_strength  MAE=2.105  RMSE=2.679  PoissonDev=1.482  (n=1573)
+      gbr_poisson        MAE=2.151  RMSE=2.752  PoissonDev=1.569  (n=1796)
+    ✅ Deployed: negbinom strength model (home_adv=0.191, alpha=0.061, converged=True)
+
+  Corner model — Bundesliga...
+    Walk-forward recommendation: poisson_strength
+      poisson_strength   MAE=2.122  RMSE=2.695  PoissonDev=1.539  (n=1692)
+      negbinom_strength  MAE=2.123  RMSE=2.695  PoissonDev=1.539  (n=1692)
+      gbr_poisson        MAE=2.137  RMSE=2.729  PoissonDev=1.578  (n=1872)
+    ✅ Deployed: poisson strength model (home_adv=0.248, alpha=0.000, converged=True)
+
+  Corner model — Championship...
+    Walk-forward recommendation: negbinom_strength
+      poisson_strength   MAE=2.148  RMSE=2.703  PoissonDev=1.505  (n=2907)
+      negbinom_strength  MAE=2.148  RMSE=2.703  PoissonDev=1.505  (n=2907)
+      gbr_poisson        MAE=2.160  RMSE=2.729  PoissonDev=1.531  (n=3428)
+    ✅ Deployed: negbinom strength model (home_adv=0.231, alpha=0.073, converged=True)
+
+  Corner model — Eredivisie...
+    Walk-forward recommendation: negbinom_strength
+      poisson_strength   MAE=2.190  RMSE=2.815  PoissonDev=1.614  (n=1691)
+      negbinom_strength  MAE=2.189  RMSE=2.816  PoissonDev=1.614  (n=1691)
+      gbr_poisson        MAE=2.251  RMSE=2.893  PoissonDev=1.690  (n=1856)
+    ✅ Deployed: negbinom strength model (home_adv=0.227, alpha=0.073, converged=True)
+
+  Corner model — Greek Super League...
+    Walk-forward recommendation: poisson_strength
+      poisson_strength   MAE=1.969  RMSE=2.503  PoissonDev=1.521  (n=1375)
+      negbinom_strength  MAE=1.969  RMSE=2.504  PoissonDev=1.522  (n=1375)
+      gbr_poisson        MAE=2.000  RMSE=2.569  PoissonDev=1.592  (n=1464)
+    ✅ Deployed: poisson strength model (home_adv=0.243, alpha=0.000, converged=True)
+
+  Corner model — La Liga...
+    Walk-forward recommendation: poisson_strength
+      poisson_strength   MAE=2.080  RMSE=2.660  PoissonDev=1.554  (n=2153)
+      negbinom_strength  MAE=3.181  RMSE=8.445  PoissonDev=3.406  (n=2153)
+      gbr_poisson        MAE=2.118  RMSE=2.707  PoissonDev=1.616  (n=2368)
+    ✅ Deployed: poisson strength model (home_adv=0.238, alpha=0.000, converged=True)
+
+  Corner model — Ligue 1...
+    Walk-forward recommendation: poisson_strength
+      poisson_strength   MAE=2.095  RMSE=2.669  PoissonDev=1.536  (n=1883)
+      negbinom_strength  MAE=2.095  RMSE=2.670  PoissonDev=1.537  (n=1883)
+      gbr_poisson        MAE=2.174  RMSE=2.770  PoissonDev=1.652  (n=2096)
+    ✅ Deployed: poisson strength model (home_adv=0.171, alpha=0.000, converged=True)
+
+  Corner model — Ligue 2...
+    Walk-forward recommendation: gbr_poisson
+      poisson_strength   MAE=2.073  RMSE=2.625  PoissonDev=1.579  (n=1613)
+      negbinom_strength  MAE=2.073  RMSE=2.625  PoissonDev=1.579  (n=1613)
+      gbr_poisson        MAE=2.062  RMSE=2.625  PoissonDev=1.587  (n=2088)
+    ✅ Deployed: GBR Poisson model (walk-forward selected)
+
+  Corner model — Premier League...
+    Walk-forward recommendation: poisson_strength
+      poisson_strength   MAE=2.214  RMSE=2.803  PoissonDev=1.576  (n=2333)
+      negbinom_strength  MAE=2.215  RMSE=2.804  PoissonDev=1.576  (n=2333)
+      gbr_poisson        MAE=2.246  RMSE=2.835  PoissonDev=1.609  (n=2644)
+    ✅ Deployed: poisson strength model (home_adv=0.146, alpha=0.000, converged=True)
+
+  Corner model — Primeira Liga...
+    Walk-forward recommendation: poisson_strength
+      poisson_strength   MAE=2.174  RMSE=2.741  PoissonDev=1.577  (n=1709)
+      negbinom_strength  MAE=2.174  RMSE=2.741  PoissonDev=1.578  (n=1709)
+      gbr_poisson        MAE=2.232  RMSE=2.834  PoissonDev=1.685  (n=1888)
+    ✅ Deployed: poisson strength model (home_adv=0.155, alpha=0.000, converged=True)
+
+  Corner model — Segunda Division...
+    Walk-forward recommendation: poisson_strength
+      poisson_strength   MAE=2.062  RMSE=2.641  PoissonDev=1.556  (n=2212)
+      negbinom_strength  MAE=2.062  RMSE=2.642  PoissonDev=1.557  (n=2212)
+      gbr_poisson        MAE=2.062  RMSE=2.627  PoissonDev=1.551  (n=2796)
+    ✅ Deployed: poisson strength model (home_adv=0.234, alpha=0.000, converged=True)
+
+  Corner model — Serie A...
+    Walk-forward recommendation: negbinom_strength
+      poisson_strength   MAE=2.155  RMSE=2.685  PoissonDev=1.579  (n=2131)
+      negbinom_strength  MAE=2.155  RMSE=2.685  PoissonDev=1.579  (n=2131)
+      gbr_poisson        MAE=2.213  RMSE=2.763  PoissonDev=1.667  (n=2360)
+    ✅ Deployed: negbinom strength model (home_adv=0.210, alpha=0.251, converged=True)
+
+  Corner model — Serie B...
+    Walk-forward recommendation: poisson_strength
+      poisson_strength   MAE=2.145  RMSE=2.721  PoissonDev=1.565  (n=1559)
+      negbinom_strength  MAE=2.145  RMSE=2.721  PoissonDev=1.565  (n=1559)
+      gbr_poisson        MAE=2.162  RMSE=2.725  PoissonDev=1.592  (n=2220)
+    ✅ Deployed: poisson strength model (home_adv=0.172, alpha=0.000, converged=True)
+
+  Corner model — Super Lig...
+    Walk-forward recommendation: poisson_strength
+      poisson_strength   MAE=2.106  RMSE=2.668  PoissonDev=1.519  (n=1802)
+      negbinom_strength  MAE=2.106  RMSE=2.669  PoissonDev=1.520  (n=1802)
+      gbr_poisson        MAE=2.133  RMSE=2.713  PoissonDev=1.570  (n=2092)
+    ✅ Deployed: poisson strength model (home_adv=0.178, alpha=0.000, converged=True)
+
+✅ Trained 15 corner models
+
+🔤 Creating team mappings...
+✅ Mappings for 422 teams
+
+💾 Saving models...
+  ✅ final_model.pkl
+  ✅ dc_models.pkl
+  ✅ corner_model.pkl  (new artifact)
+  ✅ corner_feature_cols.pkl  (new artifact)
+  ✅ card_model.pkl  (new artifact)
+  ✅ card_feature_cols.pkl  (new artifact)
+  ✅ league_config.pkl
+  ✅ feature_cols.pkl
+  ✅ processed_data.pkl
+  ✅ team_mapping.pkl
+  ✅ all_teams.pkl
+  ✅ current_teams.pkl
+
+================================================================================
+🎉 TRAINING COMPLETE!
+================================================================================
+
+📊 SUMMARY:
+  • Seasons requested: 10 (1718 .. 2627)
+  • Matches (final training set): 43,403
+  • Historical teams (all_teams): 422
+  • Features: 67
+  • Leagues: 15
+  • In-sample log-loss: 0.9450  (optimistic, do not trust for live performance)
+  • Out-of-fold log-loss: 1.0487  (realistic estimate)
+
+📅 SEASON LOAD REPORT (per league):
+  • Premier League: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 20
+  • Championship: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 24
+  • La Liga: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 20
+  • Segunda Division: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 22
+  • Serie A: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 20
+  • Serie B: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 20
+  • Bundesliga: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 18
+  • 2. Bundesliga: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 18
+  • Ligue 1: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 18
+  • Ligue 2: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 18
+  • Eredivisie: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 18
+  • Belgian Pro League: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 18
+  • Primeira Liga: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 18
+  • Super Lig: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 18
+  • Greek Super League: 10/10 seasons loaded, 0 unavailable (none) | current season: 2627 | current teams: 14
+
+📐 ARTIFACT LEAGUE COVERAGE:
+  • Configured leagues: 15
+  • Historical-data leagues: 15
+  • ML model leagues: 15
+  • Dixon-Coles leagues (deployed): 15
+  • Dixon-Coles leagues (converged): 15
+  • Dixon-Coles leagues (non-converged, fallback-safe): 0
+  • Corner model leagues: 15
+  • Card model leagues: 15
+  ✅ training_manifest.json
+
+💾 FILES SAVED:
+  • final_model.pkl
+  • dc_models.pkl
+  • corner_model.pkl        (new — Task 2)
+  • corner_feature_cols.pkl (new — Task 2)
+  • feature_cols.pkl
+  • processed_data.pkl
+  • team_mapping.pkl
+  • all_teams.pkl
+  • current_teams.pkl
+
+📦 CACHED (auto-invalidates if seasons/schema change):
+  • cache/raw_data.pkl (+ raw_data_meta.pkl)
+  • cache/features.pkl (+ features_meta.pkl)
+
+✅ Ready for deployment!
+
+
+Validating complete artifact set...
+Validating final_model.pkl...
+Validating dc_models.pkl...
+Validating corner_model.pkl...
+Validating corner_feature_cols.pkl...
+Validating card_model.pkl...
+Validating card_feature_cols.pkl...
+Validating league_config.pkl...
+Validating feature_cols.pkl...
+Validating processed_data.pkl...
+Validating team_mapping.pkl...
+Validating all_teams.pkl...
+Validating current_teams.pkl...
+
+Artifact validation passed: 15/15 historical leagues, 15/15 Dixon-Coles models, 15/15 corner models, 15/15 card models.
+
+============================================================================
+TRAINING AND VALIDATION COMPLETED
+============================================================================
+Training timestamp: 2026-10-31T19:01:26.231672
+Historical matches: 43403
+Backup retained at: C:\Users\chumb\Desktop\General\Manafrica\machine learning\football_predictor\training_backups\training_20261031_185508_284416

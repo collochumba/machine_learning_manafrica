@@ -969,3 +969,66 @@ def test_same_league_history_takes_priority_over_bridge():
     assert bridge is False  # same-league history was used, bridge never needed
     hgs = dict(zip(_BRIDGE_FEATURE_COLS, features))["HGS_L5"]
     assert abs(hgs - 3.0) < 1e-9  # the team's own Premier League row, unblended
+
+# ============================================================================
+# Non-converged Dixon-Coles must not flatten every fixture to league averages
+# ============================================================================
+
+def test_nonconverged_dc_uses_fixture_specific_ml_probabilities(monkeypatch):
+    import models as models_module
+    predict_with_fallback = models_module.predict_with_fallback
+    monkeypatch.setattr(
+        models_module,
+        "get_fixture_features",
+        lambda df, cols, league, home, away, fixture_date=None: (
+            np.array([1.0 if home == "Alpha" else 3.0]), False, False
+        ),
+    )
+
+    class FakeNonConvergedDC:
+        converged_ = False
+
+    class FakeML:
+        def predict_proba(self, X):
+            # The fixture's home-team form feature must affect the result.
+            strength = float(X[0, 0])
+            p_home = 0.25 + 0.10 * strength
+            p_away = 0.55 - 0.10 * strength
+            return np.array([[p_home, 0.20, p_away]])
+
+    history = pd.DataFrame({
+        "League": ["Test League"] * 4,
+        "Date": pd.to_datetime([
+            "2025-01-01", "2025-01-08", "2025-01-15", "2025-01-22"
+        ]),
+        "HomeTeam": ["Alpha", "Gamma", "Alpha", "Gamma"],
+        "AwayTeam": ["Beta", "Delta", "Delta", "Beta"],
+        "HGS_L5": [1.0, 3.0, 1.0, 3.0],
+        "FTR": ["H", "H", "D", "A"],
+        "FTHG": [2, 3, 1, 0],
+        "FTAG": [0, 1, 1, 2],
+    })
+
+    common = dict(
+        final_model=FakeML(),
+        dc_models={"Test League": FakeNonConvergedDC()},
+        feature_cols=["HGS_L5"],
+        df=history,
+        team_mapping={},
+        all_teams=[],
+        fixture_date="2025-02-01",
+    )
+
+    alpha = predict_with_fallback(
+        {"league": "Test League", "home": "Alpha", "away": "Beta"},
+        **common,
+    )
+    gamma = predict_with_fallback(
+        {"league": "Test League", "home": "Gamma", "away": "Beta"},
+        **common,
+    )
+
+    assert alpha["used_fallback"] is True
+    assert gamma["used_fallback"] is True
+    assert alpha["prob_home"] != gamma["prob_home"]
+    assert any("XGBoost probabilities" in w for w in alpha["warnings"])
