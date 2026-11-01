@@ -1034,12 +1034,12 @@ with tab1:
                         away = r['away']['resolved']
                         date_text = str(r.get('date') or '').strip()
                         time_text = str(r.get('time') or '').strip()
+                        # Keep the option text focused on the fixture and kick-off.
+                        # Avoid odds/index suffixes that make the dropdown harder to scan.
                         when = " · ".join(part for part in (date_text, time_text) if part)
-                        odds_label = "odds available" if r.get('odds') else "odds unavailable"
-                        label = f"{home} vs {away}"
-                        if when:
-                            label += f" · {when}"
-                        label += f" · {odds_label} · #{fixture_index + 1}"
+                        if not when:
+                            when = "Kick-off time TBC"
+                        label = f"{home} vs {away} — Kick-off: {when}"
                         options.append(label)
                         option_lookup[label] = r
                     league_options[league_name] = options
@@ -1076,11 +1076,11 @@ with tab1:
                     )
                     st.caption(f"{selected_total} of {len(valid_fixtures)} fixtures selected across {len(league_names)} leagues")
 
-                # Four league boxes per row. Each expander opens its own compact,
-                # searchable fixture dropdown and per-league selection controls.
-                grid_columns = st.columns(4)
+                # Two league boxes per row provide enough width for full team names
+                # and kick-off details inside each searchable fixture dropdown.
+                grid_columns = st.columns(2)
                 for league_index, league_name in enumerate(league_names):
-                    column = grid_columns[league_index % 4]
+                    column = grid_columns[league_index % 2]
                     state_key = league_state_key(league_name)
                     options = league_options[league_name]
                     country = league_country.get(league_name, "Other")
@@ -1105,7 +1105,10 @@ with tab1:
                                     options=options,
                                     key=state_key,
                                     placeholder="Search teams or fixtures...",
-                                    help=f"Search and select fixtures in {league_name} only.",
+                                    help=(
+                                        f"Search by either team name. Each option shows both teams "
+                                        f"and the scheduled kick-off date/time for {league_name}."
+                                    ),
                                 )
                                 st.caption(
                                     f"{len(st.session_state.get(state_key, []))} of {len(options)} selected"
